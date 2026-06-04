@@ -129,11 +129,20 @@ Charlie's goal: get every data source flowing and presented well. Descriptive/re
 
 Goal: quantify how well each player is ACTUALLY playing — last 1 / last 3 / last 5 starts — and normalize across the field (z-score) to help judge a player's "proper value." Descriptive analytics, **not** a model.
 
-- [ ] **Research spike: what recent-form data can we actually get?** — **Decided: ESPN-first (free).** Standalone probe (like the Polymarket one): try ESPN's golf API for per-player recent results (athlete results / event history). Output a coverage report: how many of our 72 players we can get form for, and which fields (finish position, scoring avg, strokes-gained if available). Only if ESPN proves too thin do we revisit **DataGolf** (paid, strokes-gained) as an upgrade — not now.
+- [x] **Research spike: what recent-form data can we actually get?** — ✅ DONE in `form_probe.py` (standalone). **ESPN is plenty — 72/72 coverage on every field, free, no auth.** Findings:
+  - **Athlete ids for free:** the PGA `scoreboard` competitor `id` IS the ESPN athlete id (10166 → J.J. Spaun). Since the scoreboard = the live field, all 72 of our players map directly — no name search needed for ids.
+  - **One endpoint has it all:** `site.web.api.espn.com/apis/common/v3/sports/golf/pga/athletes/{id}/overview` (one GET/player) →
+    - `recentTournaments[0].eventsStats[]` — last ~5 starts, each with `competitions[0].competitors[0].status.position.displayName` (finish, e.g. `T2`). → **L1 / avg-L3 / avg-L5 finish.**
+    - `statistics.splits` (PGA TOUR row) — **events, cuts made, top-10s, wins, scoring avg.** → made-cut %.
+    - `seasonRankings.categories` — **driving distance, driving accuracy %, greens hit, putts/GIR, birdies/round** (each w/ a PGA-Tour rank) + **money-won rank** (`amount`). These are the best free **Strokes-Gained proxies**.
+  - **Coverage (of 72): 72/72** on L1/L3/L5 finish, made-cut %, top10, wins, events, earnings rank, and all 5 SG-proxy categories. **70/72** on PGA-TOUR scoring avg (only Rory McIlroy + Alex Fitzpatrick missing — their events sit under a non-PGA split; we still have their finishes/everything else).
+  - **NOT available free:** Strokes Gained (total/OTT/APP/ARG/PUTT) and OWGR — both DataGolf (paid). The SG proxies above + recent finishes are the free substitute. **Verdict: ESPN is strong enough; do NOT pay for DataGolf now.**
+  - **Field-wide z-scores work** (computed in the probe): scoring-avg-z and avg-L5-finish-z (both inverted so high = good). Top of the form board reads sensibly: Scheffler, Spaun, Åberg, Clark.
+  - ⚠️ **Note for form.py:** the live in-progress tournament shows up in `eventsStats` with a moving position — exclude the current event id explicitly (don't rely only on `status.state=='post'`) so L1/L3/L5 are completed starts only.
 
-- [ ] **`form.py` module** — Pull recent results per player; compute last-1 / last-3 / last-5 metrics (avg finish, scoring avg, …) and a **z-score normalized across the field**; store in a new SQLite table; refresh ~daily (form changes slowly). Match players via the same `leaderboard.py` fuzzy logic.
+- [ ] **`form.py` module** — ⭐ NEXT. Promote `form_probe.py`'s fetch/parse into a module: pull each player's overview, compute L1/L3/L5 avg finish + made-cut % + scoring avg + the SG-proxy ranks, z-score across the field, store in a new SQLite `form` table, refresh ~daily (form changes slowly) on a background task in `server.py`. Match to Kalshi tickers via the existing `leaderboard.py` fuzzy logic (athlete-id path is even cleaner). Broadcast a `type:"form"` per-ticker map like leaderboard.
 
-- [ ] **Form columns + detail** — Add recent-form columns (e.g., L5 finish, form z-score) to the table + a fuller breakdown in the detail panel.
+- [ ] **Form columns + detail** — Add a compact form signal to the table (e.g. **Form** = avg-L5-finish-z, or an L5 sparkline) + a fuller breakdown in the detail panel (recent finishes list, scoring avg, cut %, SG-proxy ranks). Table now has full width for it (3.5 drawer change).
 
 - [ ] **(Optional) in-tournament momentum** — Reuse the live ESPN leaderboard (position/score/thru over time) as a current-event momentum signal.
 
