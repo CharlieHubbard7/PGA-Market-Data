@@ -155,6 +155,7 @@ async def get_markets():
             "pos":          m.get("pos", "—"),
             "score":        m.get("score", "—"),
             "thru":         m.get("thru", "—"),
+            "round":        m.get("round", "—"),
             "form":         m.get("form"),
             **_poly_fields(ticker),
         })
@@ -224,6 +225,7 @@ async def ws_endpoint(websocket: WebSocket):
             "pos":         m.get("pos", "—"),
             "score":       m.get("score", "—"),
             "thru":        m.get("thru", "—"),
+            "round":       m.get("round", "—"),
             "form":        m.get("form"),
             **_poly_fields(ticker),
         })

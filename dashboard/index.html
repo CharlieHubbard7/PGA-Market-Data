@@ -134,9 +134,23 @@
   }
 
   table {
-    width: 100%;
+    width: max-content;       /* grow as wide as the columns need — Excel-style */
+    min-width: 100%;
     border-collapse: collapse;
   }
+
+  /* frozen Player column — stays put while you scroll the stats horizontally */
+  th.col-sticky, td.col-sticky {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: var(--surface);
+    box-shadow: 1px 0 0 var(--border);
+  }
+  tbody td.col-sticky { background: var(--bg); }
+  tbody tr:hover td.col-sticky    { background: #11161d; }
+  tbody tr.selected td.col-sticky { background: #121a26; }
+  thead th.col-sticky { z-index: 3; }
 
   thead th {
     position: sticky;
@@ -240,6 +254,13 @@
   .sg-cell      { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .sg-cell b    { color: var(--text); font-weight: 600; }
   .form-none    { color: var(--border); }
+
+  /* season skill-stat columns (driving / GIR / putting / …) */
+  th.skill-col  { background: rgba(210,153,34,.06); }
+  .skill-cell   { font-variant-numeric: tabular-nums; color: var(--text); }
+  .skill-cell .rk { font-size: 9px; color: var(--muted); margin-left: 3px; }
+  .rd-cell      { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .thru-cell    { font-variant-numeric: tabular-nums; color: var(--text); }
 
   /* detail panel: recent-form breakdown */
   .detail-form  { padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
@@ -411,16 +432,26 @@
     <table>
       <thead>
         <tr>
-          <th data-col="player"      data-arrow="↑">Player</th>
-          <th data-col="posVal"      data-arrow="↑">Pos</th>
-          <th data-col="scoreVal"    data-arrow="↑">Score</th>
+          <th data-col="player"      data-arrow="↑" class="col-sticky">Player</th>
+          <th data-col="posVal"      data-arrow="↑" title="Live leaderboard position">Pos</th>
+          <th data-col="roundVal"    data-arrow="↑" title="Current round">Rd</th>
+          <th data-col="thruVal"     data-arrow="↑" title="Holes played this round">Thru</th>
+          <th data-col="scoreVal"    data-arrow="↑" title="Score to par">Score</th>
           <th data-col="kPriceVal"   data-arrow="↑" class="k-price"    title="Kalshi price — (bid+ask)/2">K Price</th>
           <th data-col="polyPriceVal" data-arrow="↑" class="poly-price" title="Polymarket price — mid when spread ≤10¢, else last trade">P Price</th>
           <th data-col="truePriceVal" data-arrow="↑" class="true-price" title="Blended consensus — K and P weighted by update rate">True</th>
           <th data-col="formScoreVal" data-arrow="↑" class="form-col" title="Recent-form score: z vs the field (avg-L5 finish + scoring avg). Higher = hotter.">Form</th>
-          <th data-col="avgL5Val"    data-arrow="↑" title="Average finish over last 5 starts (lower = better)">L5</th>
+          <th data-col="last1Val"    data-arrow="↑" title="Most recent tournament finish">L1</th>
+          <th data-col="avgL3Val"    data-arrow="↑" title="Avg finish, last 3 starts (lower = better)">L3</th>
+          <th data-col="avgL5Val"    data-arrow="↑" title="Avg finish, last 5 starts (lower = better)">L5</th>
           <th data-col="cutPctVal"   data-arrow="↑" title="Season made-cut %">Cut%</th>
-          <th data-col="sgRankVal"   data-arrow="↑" title="ESPN season tour ranks — GIR / Putts-per-GIR (free Strokes-Gained proxy; lower = better)">SG</th>
+          <th data-col="scAvgVal"    data-arrow="↑" class="skill-col" title="Season scoring average (lower = better)">ScAvg</th>
+          <th data-col="girVal"      data-arrow="↑" class="skill-col" title="Greens in regulation % (recent avg; higher = better)">GIR%</th>
+          <th data-col="puttVal"     data-arrow="↑" class="skill-col" title="Putts per GIR — putting (season; lower = better)">Putt</th>
+          <th data-col="driveVal"    data-arrow="↑" class="skill-col" title="Driving distance, yds (season)">Drive</th>
+          <th data-col="accVal"      data-arrow="↑" class="skill-col" title="Driving accuracy % (season; higher = better)">Acc</th>
+          <th data-col="birdieVal"   data-arrow="↑" class="skill-col" title="Birdies per round (season; higher = better)">Bird</th>
+          <th data-col="sandVal"     data-arrow="↑" class="skill-col" title="Sand save % (season; higher = better)">Sand</th>
           <th data-col="volume"      data-arrow="↑" class="col-k">K Vol</th>
           <th data-col="poly_volume" data-arrow="↑" class="col-p">P Vol</th>
           <th>Speed</th>
@@ -429,7 +460,7 @@
         </tr>
       </thead>
       <tbody id="marketTbody">
-        <tr><td colspan="15" class="empty">Waiting for data…</td></tr>
+        <tr><td colspan="25" class="empty">Waiting for data…</td></tr>
       </tbody>
     </table>
   </div>
@@ -492,6 +523,8 @@ function recomputeSortKeys() {
   Object.values(markets).forEach(m => {
     m.posVal       = parsePos(m.pos);
     m.scoreVal     = parseScore(m.score);
+    m.roundVal     = m.round && m.round !== '—' ? +String(m.round).replace('R', '') : 0;
+    m.thruVal      = m.thru === 'F' ? 18 : (+m.thru || 0);
     const a = bestArb(m);
     m.arbNet       = a ? a.net : -1;
     m.kPriceVal    = kPrice(m)    ?? -1;
@@ -499,9 +532,17 @@ function recomputeSortKeys() {
     m.truePriceVal = truePrice(m) ?? -1;
     const f = m.form || {};
     m.formScoreVal = f.form_score ?? -99;     // missing form sorts to the bottom
-    m.avgL5Val     = f.avg_l5 ?? 9999;        // lower = better finish
+    m.last1Val     = f.last1  ?? 9999;        // finishes: lower = better
+    m.avgL3Val     = f.avg_l3 ?? 9999;
+    m.avgL5Val     = f.avg_l5 ?? 9999;
     m.cutPctVal    = f.made_cut_pct ?? -1;
-    m.sgRankVal    = sgRankVal(m);            // lower = better skill rank
+    m.scAvgVal     = f.scoring_avg ?? 9999;   // lower = better
+    m.girVal       = f.gir_pct ?? -1;         // higher = better
+    m.puttVal      = skv(m, 'putts_gir') ?? 9999;   // lower = better
+    m.driveVal     = skv(m, 'drive_dist') ?? -1;
+    m.accVal       = skv(m, 'drive_acc') ?? -1;
+    m.birdieVal    = skv(m, 'birdies_rnd') ?? -1;
+    m.sandVal      = skv(m, 'sand_save') ?? -1;
   });
 }
 
@@ -553,11 +594,11 @@ function onInit(msg) {
 }
 
 function onLeaderboard(msg) {
-  // Server sends a per-ticker map: { ticker: {pos, score, thru} }
+  // Server sends a per-ticker map: { ticker: {pos, score, thru, round} }
   Object.entries(msg.markets || {}).forEach(([ticker, lb]) => {
     const m = markets[ticker];
     if (!m) return;
-    m.pos = lb.pos; m.score = lb.score; m.thru = lb.thru;
+    m.pos = lb.pos; m.score = lb.score; m.thru = lb.thru; m.round = lb.round;
   });
   recomputeSortKeys();
   renderTable();   // once per ~60s — cheap enough for a full re-render
@@ -743,22 +784,20 @@ function formClass(z) {
   if (z >= -0.4) return 'form-cool';
   return 'form-cold';
 }
-// composite SG-proxy rank (GIR + putts/GIR tour ranks, lower = better) for sorting
-function sgRankVal(m) {
-  const r = m.form && m.form.ranks;
-  if (!r) return 9999;
-  const xs = [r.gir, r.putts_gir].filter(v => v != null);
-  return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 9999;
-}
 function fmtForm(z)   { return z == null ? '—' : (z > 0 ? '+' : '') + z.toFixed(2); }
 function fmtFinish(v) { return v == null ? '—' : (Number.isInteger(v) ? v : v.toFixed(1)); }
 function fmtPct(v)    { return v == null ? '—' : `${Math.round(v)}%`; }
-function sgCellHTML(m) {
-  const r = m.form && m.form.ranks;
-  if (!r || (r.gir == null && r.putts_gir == null)) return '<span class="form-none">—</span>';
-  const g = r.gir != null ? `<b>${r.gir}</b>` : '—';
-  const p = r.putts_gir != null ? `<b>${r.putts_gir}</b>` : '—';
-  return `GIR ${g} · PT ${p}`;
+
+// season skill stat accessors: value + PGA-Tour rank
+function skv(m, key) { return (m.form && m.form.skills && m.form.skills[key] || {}).value ?? null; }
+function skr(m, key) { return (m.form && m.form.skills && m.form.skills[key] || {}).rank  ?? null; }
+
+// a skill cell: formatted value + small tour rank. `dec` decimals, `suffix` like '%'.
+function skillCell(m, key, dec, suffix) {
+  const v = skv(m, key), r = skr(m, key);
+  if (v == null) return '<span class="form-none">—</span>';
+  const val = dec != null ? v.toFixed(dec) : v;
+  return `${val}${suffix || ''}${r != null ? `<span class="rk">#${r}</span>` : ''}`;
 }
 
 // ── table rendering ───────────────────────────────────────────────────────────
@@ -781,7 +820,7 @@ function renderTable() {
   const tbody = document.getElementById('marketTbody');
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="15" class="empty">No markets match the filter.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="25" class="empty">No markets match the filter.</td></tr>`;
     document.getElementById('filterCount').textContent = '';
     return;
   }
@@ -802,20 +841,30 @@ function renderTable() {
 function rowHTML(m) {
   const sv = m.scoreVal;
   const scoreClass = (sv == null || sv === 999) ? 'score-even' : sv < 0 ? 'score-under' : sv > 0 ? 'score-over' : 'score-even';
-  const scoreTxt = (m.score && m.score !== '—' && m.thru && m.thru !== '—') ? `${m.score} <span style="color:var(--muted);font-weight:400">(${m.thru})</span>` : (m.score || '—');
   const bv = bestBuyVenue(m);
+  const f = m.form || {};
   return `
     <tr data-ticker="${m.ticker}">
-      <td class="player-name" title="${m.title}">${m.player}</td>
+      <td class="player-name col-sticky" title="${m.title}">${m.player}</td>
       <td class="pos-cell">${m.pos || '—'}</td>
-      <td class="score-cell ${scoreClass}">${scoreTxt}</td>
+      <td class="rd-cell">${m.round || '—'}</td>
+      <td class="thru-cell">${m.thru || '—'}</td>
+      <td class="score-cell ${scoreClass}">${m.score || '—'}</td>
       <td class="k-price ${kConfClass(m)}${bv === 'k' ? ' best-ask' : ''}" id="kprice-${m.ticker}">${fmtPrice(kPrice(m))}</td>
       <td class="poly-price ${pConfClass(m)}${bv === 'p' ? ' best-ask' : ''}" id="pprice-${m.ticker}">${fmtPrice(polyPrice(m))}</td>
       <td class="true-price" id="trueprice-${m.ticker}">${fmtPrice(truePrice(m))}</td>
-      <td class="form-cell ${formClass(m.form && m.form.form_score)}" id="form-${m.ticker}">${fmtForm(m.form && m.form.form_score)}</td>
-      <td class="form-num"   id="l5-${m.ticker}">${fmtFinish(m.form && m.form.avg_l5)}</td>
-      <td class="form-muted" id="cut-${m.ticker}">${fmtPct(m.form && m.form.made_cut_pct)}</td>
-      <td class="sg-cell"    id="sg-${m.ticker}">${sgCellHTML(m)}</td>
+      <td class="form-cell ${formClass(f.form_score)}" id="form-${m.ticker}">${fmtForm(f.form_score)}</td>
+      <td class="form-num">${fmtFinish(f.last1)}</td>
+      <td class="form-num">${fmtFinish(f.avg_l3)}</td>
+      <td class="form-num">${fmtFinish(f.avg_l5)}</td>
+      <td class="form-muted">${fmtPct(f.made_cut_pct)}</td>
+      <td class="skill-cell">${f.scoring_avg ?? '—'}</td>
+      <td class="skill-cell">${f.gir_pct != null ? f.gir_pct + '%' : '—'}</td>
+      <td class="skill-cell">${skillCell(m, 'putts_gir', 3, '')}</td>
+      <td class="skill-cell">${skillCell(m, 'drive_dist', 1, '')}</td>
+      <td class="skill-cell">${skillCell(m, 'drive_acc', 1, '%')}</td>
+      <td class="skill-cell">${skillCell(m, 'birdies_rnd', 2, '')}</td>
+      <td class="skill-cell">${skillCell(m, 'sand_save', 0, '%')}</td>
       <td class="vol-cell"   id="vol-${m.ticker}">${fmtVol(m.volume)}</td>
       <td class="vol-cell"   id="pvol-${m.ticker}">${fmtUsd(m.poly_volume)}</td>
       <td class="speed-cell">
@@ -946,8 +995,9 @@ function updateDetailForm(m) {
   if (!el) return;
   const f = m && m.form;
   if (!f) { el.innerHTML = '<div class="df-title">Recent Form</div><div class="df-empty">No form data.</div>'; return; }
-  const r = f.ranks || {};
-  const rk = v => v != null ? `#${v}` : '—';
+  const sk = f.skills || {};
+  const val = (k, dec, suf) => { const v = (sk[k] || {}).value; return v == null ? '—' : (dec != null ? v.toFixed(dec) : v) + (suf || ''); };
+  const rk  = (k) => { const r = (sk[k] || {}).rank; return r != null ? ` <span class="rk">#${r}</span>` : ''; };
   el.innerHTML = `
     <div class="df-title">Recent Form
       <span style="float:right" class="${formClass(f.form_score)}">${fmtForm(f.form_score)} z</span>
@@ -960,7 +1010,16 @@ function updateDetailForm(m) {
       <div class="df-row"><span>Scoring avg</span><b>${f.scoring_avg ?? '—'}</b></div>
       <div class="df-row"><span>Top 10s / Wins</span><b>${f.top10 ?? '—'} / ${f.wins ?? '—'}</b></div>
     </div>
-    <div class="df-recent">Tour ranks — Drive <b>${rk(r.drive_dist)}</b> · Acc <b>${rk(r.drive_acc)}</b> · GIR <b>${rk(r.gir)}</b> · Putt <b>${rk(r.putts_gir)}</b> · Birdies <b>${rk(r.birdies_rnd)}</b> · Money <b>${rk(r.earnings_rank)}</b></div>`;
+    <div class="df-title" style="margin-top:10px">Season Skills (value · tour rank)</div>
+    <div class="df-grid">
+      <div class="df-row"><span>GIR%</span><b>${f.gir_pct != null ? f.gir_pct + '%' : '—'}</b></div>
+      <div class="df-row"><span>Putts/GIR</span><b>${val('putts_gir', 3)}${rk('putts_gir')}</b></div>
+      <div class="df-row"><span>Driving</span><b>${val('drive_dist', 1)}${rk('drive_dist')}</b></div>
+      <div class="df-row"><span>Drive acc</span><b>${val('drive_acc', 1, '%')}${rk('drive_acc')}</b></div>
+      <div class="df-row"><span>Birdies/rnd</span><b>${val('birdies_rnd', 2)}${rk('birdies_rnd')}</b></div>
+      <div class="df-row"><span>Sand save</span><b>${val('sand_save', 0, '%')}${rk('sand_save')}</b></div>
+    </div>
+    <div class="df-recent">Money rank <b>${(sk.earnings_rank != null ? '#' + sk.earnings_rank : '—')}</b></div>`;
 }
 
 function updateDetailPrices(m) {

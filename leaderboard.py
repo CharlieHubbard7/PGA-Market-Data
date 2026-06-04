@@ -76,13 +76,20 @@ def _score_val(s: str | None) -> int:
         return 999
 
 
-def _thru(competitor: dict) -> str:
-    """Holes played in the most recent started round → '12', 'F', or '—'."""
-    for period in reversed(competitor.get("linescores", [])):
-        holes = period.get("linescores", [])
+def _round_thru(competitor: dict) -> tuple[str, str]:
+    """(round, thru) for the player's current/most-recent round:
+    round → 'R1'..'R4' (or '—'); thru → '12', 'F', or '—'."""
+    periods = competitor.get("linescores", [])
+    rnd = None
+    for p in periods:                       # highest period that has started
+        if p.get("linescores") or p.get("value") is not None:
+            rnd = p.get("period")
+    rnd_str = f"R{rnd}" if rnd else "—"
+    for period in reversed(periods):
+        holes = period.get("linescores") or []
         if holes:
-            return "F" if len(holes) >= 18 else str(len(holes))
-    return "—"
+            return rnd_str, ("F" if len(holes) >= 18 else str(len(holes)))
+    return rnd_str, "—"
 
 
 def _parse(payload: dict) -> list[dict]:
@@ -107,13 +114,15 @@ def _parse(payload: dict) -> list[dict]:
         ahead = sum(1 for o in ranked if _score_val(o.get("score")) < val)
         shared = sum(1 for o in ranked if _score_val(o.get("score")) == val)
         position = ("T" if shared > 1 else "") + str(ahead + 1) if val != 999 else "—"
+        rnd, thru = _round_thru(c)
 
         rows.append({
             "player_name": name,
             "norm":        normalize_name(name),
             "position":    position,
             "total":       score,
-            "thru":        _thru(c),
+            "thru":        thru,
+            "round":       rnd,
         })
     return rows
 
@@ -146,7 +155,9 @@ async def refresh_leaderboard_loop():
                     m["pos"]   = row["position"] if row else "—"
                     m["score"] = row["total"]    if row else "—"
                     m["thru"]  = row["thru"]     if row else "—"
-                    updates[ticker] = {"pos": m["pos"], "score": m["score"], "thru": m["thru"]}
+                    m["round"] = row["round"]    if row else "—"
+                    updates[ticker] = {"pos": m["pos"], "score": m["score"],
+                                       "thru": m["thru"], "round": m["round"]}
 
                 matched = sum(1 for u in updates.values() if u["pos"] != "—")
                 await feed._broadcast({"type": "leaderboard", "markets": updates})

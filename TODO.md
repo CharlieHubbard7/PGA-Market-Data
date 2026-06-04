@@ -142,7 +142,12 @@ Goal: quantify how well each player is ACTUALLY playing — last 1 / last 3 / la
 
 - [x] **`form.py` module** — DONE. Promoted the probe's fetch/parse into a module mirroring `leaderboard.py`: `build_form()` (threaded ESPN pull + parse + field z-scores + composite `form_score` = mean of avg-L5-z & scoring-avg-z), `refresh_form_loop()` (every 6h — form moves between events, not minute-to-minute), `_apply()` annotates `feed.markets` in place + returns the per-ticker map. New SQLite `form` table + `db.write_form()`. Wired into `server.py` lifespan behind the `on_update=_broadcast_form` hook; broadcasts `type:"form"` (whole map). New `/api/form` endpoint; form embedded in `/api/markets` + WS snapshot. Excludes the in-progress event so L1/L3/L5 are completed starts only. Verified: 72/72 matched, Scheffler form 2.44 (GIR/putt/birdies rank #1).
 
-- [x] **Form columns + detail** — DONE. Table gained 4 columns after the price block (the mispricing-vs-form adjacency): **Form** (composite z, color-graded hot→cold), **L5** (avg last-5 finish), **Cut%** (season made-cut), **SG** (GIR / Putts-per-GIR tour ranks — the free Strokes-Gained proxy). All sortable. Detail panel has a full **Recent Form** breakdown: last/L3/L5 finish, made-cut %, scoring avg, top-10s/wins, and all 6 tour ranks (drive dist/acc, GIR, putt, birdies, money). Updates live on the `type:"form"` broadcast.
+- [x] **Form columns + detail** — DONE, then EXPANDED into a wide Excel-style sheet (per Charlie). The table is now horizontally scrollable with a **frozen Player column** (`col-sticky`), and carries the full data set:
+  - **Leaderboard split:** Pos · **Rd** (R1–R4) · **Thru** (hole) · **Score** — separate columns (was one combined cell). `leaderboard._round_thru` derives round + thru from the per-round linescores; `round` flows through the wire/markets/snapshot.
+  - **Form block:** Form (composite z, color-graded) · **L1 · L3 · L5** (last-1/3/5 finishes, split out) · Cut%.
+  - **Season skill stats, each its own column** (Charlie's "strokes gained / putting / GIR and stuff", value + tour rank): **ScAvg · GIR% · Putts/GIR · Drive · Acc · Bird · Sand**. (ESPN has no true SG — these are the free season stats; GIR% is the recent-tournament avg since ESPN's season GIR is a raw count.)
+  - All sortable; detail panel shows the full Recent-Form + Season-Skills breakdown with tour ranks + money rank.
+  - **No World Ranking:** ESPN exposes no OWGR endpoint (tested the URL + every variant — 404/empty; no `owgr` league). Money/FedEx rank is the proxy we keep. New `form` SQLite columns + migration for the skill values.
 
 - [ ] **(Optional) in-tournament momentum** — Reuse the live ESPN leaderboard (position/score/thru over time) as a current-event momentum signal.
 

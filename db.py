@@ -74,7 +74,13 @@ def init_db():
                 scoring_avg  REAL,
                 top10        INTEGER,
                 wins         INTEGER,
-                events       INTEGER
+                events       INTEGER,
+                drive_dist   REAL,
+                drive_acc    REAL,
+                gir_pct      REAL,
+                putts_gir    REAL,
+                birdies_rnd  REAL,
+                sand_save    REAL
             );
 
             CREATE INDEX IF NOT EXISTS idx_ticks_ticker_ts  ON ticks(ticker, ts);
@@ -83,6 +89,11 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_poly_ticks_cid_ts ON poly_ticks(condition_id, ts);
             CREATE INDEX IF NOT EXISTS idx_form_ts          ON form(ts);
         """)
+        # Migrate an existing form table that predates the skill-stat columns.
+        existing = {r[1] for r in conn.execute("PRAGMA table_info(form)")}
+        for col in ("drive_dist", "drive_acc", "gir_pct", "putts_gir", "birdies_rnd", "sand_save"):
+            if col not in existing:
+                conn.execute(f"ALTER TABLE form ADD COLUMN {col} REAL")
 
 
 def upsert_markets(markets: list[dict]):
@@ -139,14 +150,19 @@ def write_poly_tick(condition_id: str, yes_bid, yes_ask, yes_mid, volume):
 
 
 def write_form(rows: list[dict]):
-    """Snapshot the field's recent-form metrics at one point in time."""
+    """Snapshot the field's recent-form + skill metrics at one point in time."""
     ts = time.time()
+    def sk(r, key):
+        return (r.get("skills", {}).get(key) or {}).get("value")
     with _conn() as conn:
         conn.executemany(
             "INSERT INTO form (ts, athlete_id, player_name, form_score, avg_l5, avg_l3, "
-            "last1, made_cut_pct, scoring_avg, top10, wins, events) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "last1, made_cut_pct, scoring_avg, top10, wins, events, "
+            "drive_dist, drive_acc, gir_pct, putts_gir, birdies_rnd, sand_save) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(ts, r.get("athlete_id"), r["name"], r.get("form_score"), r.get("avg_l5"),
               r.get("avg_l3"), r.get("last1"), r.get("made_cut_pct"), r.get("scoring_avg"),
-              r.get("top10"), r.get("wins"), r.get("events")) for r in rows],
+              r.get("top10"), r.get("wins"), r.get("events"),
+              sk(r, "drive_dist"), sk(r, "drive_acc"), r.get("gir_pct"),
+              sk(r, "putts_gir"), sk(r, "birdies_rnd"), sk(r, "sand_save")) for r in rows],
         )

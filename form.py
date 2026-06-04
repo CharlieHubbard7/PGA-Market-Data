@@ -36,13 +36,14 @@ OVERVIEW   = "https://site.web.api.espn.com/apis/common/v3/sports/golf/pga/athle
 REFRESH_SECONDS = 6 * 3600   # form moves between events; 6h is plenty
 TIMEOUT = 15
 
-# seasonRankings category → (label, lower_rank_is_better is always True for ranks)
+# seasonRankings category → our label. These carry a season VALUE + a PGA-Tour rank.
+# (ESPN has no true Strokes Gained; these are the free season skill stats.)
 RANK_CATS = {
-    "yardsPerDrive":    "drive_dist",
-    "driveAccuracyPct": "drive_acc",
-    "greensHit":        "gir",
-    "puttsGirAvg":      "putts_gir",
-    "birdiesPerRound":  "birdies_rnd",
+    "yardsPerDrive":    "drive_dist",   # driving distance (yds)
+    "driveAccuracyPct": "drive_acc",    # driving accuracy %
+    "puttsGirAvg":      "putts_gir",    # putts per GIR (putting)
+    "birdiesPerRound":  "birdies_rnd",  # birdies per round
+    "sandSaves":        "sand_save",    # sand save %
 }
 
 # ── shared state (read by server.py) ────────────────────────────────────────────
@@ -120,14 +121,40 @@ def _season_splits(ov: dict) -> dict:
     return {}
 
 
-def _cats(ov: dict) -> dict:
+def _skills(ov: dict) -> dict:
+    """Season skill stats → {label: {'value': float|None, 'rank': int|None}},
+    plus a flat 'earnings_rank'. The values are the actual season numbers
+    (302 yds, 64.8% etc.); ranks are PGA-Tour-wide (lower = better)."""
     out = {}
     for c in (ov.get("seasonRankings") or {}).get("categories", []):
-        if c.get("name") in RANK_CATS:
-            out[RANK_CATS[c["name"]]] = c.get("rank")
-        elif c.get("name") == "amount":
+        nm = c.get("name")
+        if nm in RANK_CATS:
+            out[RANK_CATS[nm]] = {"value": c.get("value"), "rank": c.get("rank")}
+        elif nm == "amount":
             out["earnings_rank"] = c.get("rank")
     return out
+
+
+def _recent_gir(ov: dict, cur_event) -> float | None:
+    """Avg GIR% over recent completed events — ESPN exposes GIR per-tournament
+    (the season 'greensHit' category is a raw count, not a %), so we average it."""
+    rt = ov.get("recentTournaments") or []
+    if not rt:
+        return None
+    vals = []
+    for e in rt[0].get("eventsStats", []):
+        if cur_event and str(e.get("id")) == str(cur_event):
+            continue
+        cps = (e.get("competitions") or [{}])[0].get("competitors") or []
+        if not cps:
+            continue
+        if (cps[0].get("status", {}).get("type") or {}).get("state") != "post":
+            continue
+        stats = {s.get("abbreviation"): s.get("displayValue") for s in cps[0].get("stats", [])}
+        g = _num(stats.get("GIR"))
+        if g is not None:
+            vals.append(g)
+    return round(statistics.mean(vals), 1) if vals else None
 
 
 def _fetch_one(player: dict, cur_event: str | None) -> dict:
@@ -146,7 +173,8 @@ def _fetch_one(player: dict, cur_event: str | None) -> dict:
         "scoring_avg": sp.get("scoring_avg"),
         "top10": sp.get("top10"), "wins": sp.get("wins"), "events": sp.get("events"),
         "made_cut_pct": round(100 * sp["cuts"] / sp["events"]) if sp.get("events") else None,
-        "ranks": _cats(ov),
+        "skills": _skills(ov),
+        "gir_pct": _recent_gir(ov, cur_event),
     })
     return row
 
@@ -209,7 +237,8 @@ def _apply(rows: list[dict]) -> dict:
             "scoring_avg":  r.get("scoring_avg"),
             "top10":        r.get("top10"),
             "wins":         r.get("wins"),
-            "ranks":        r.get("ranks", {}),
+            "gir_pct":      r.get("gir_pct"),
+            "skills":       r.get("skills", {}),   # {drive_dist:{value,rank}, …}
         }
         m["form"] = wire
         updates[ticker] = wire
@@ -243,12 +272,14 @@ if __name__ == "__main__":
     ranked = sorted([r for r in rows if r.get("form_score") is not None],
                     key=lambda r: -r["form_score"])
     print(f"{len(rows)} players fetched\n")
-    print(f"{'player':22}{'form':>6}{'L5':>6}{'cut%':>6}{'scAvg':>7}{'GIR':>5}{'putt':>6}")
+    print(f"{'player':22}{'form':>6}{'L5':>6}{'cut%':>6}{'scAvg':>7}{'GIR%':>6}{'drive':>7}{'p/gir':>7}")
     for r in ranked[:20]:
-        rk = r.get("ranks", {})
+        sk = r.get("skills", {})
+        v = lambda key: (sk.get(key) or {}).get("value")
         print(f"{r['name'][:22]:22}{str(r.get('form_score') or '-'):>6}"
               f"{str(r.get('avg_l5') or '-'):>6}"
               f"{str(r.get('made_cut_pct') or '-'):>6}"
               f"{str(r.get('scoring_avg') or '-'):>7}"
-              f"{str(rk.get('gir') or '-'):>5}"
-              f"{str(rk.get('putts_gir') or '-'):>6}")
+              f"{str(r.get('gir_pct') or '-'):>6}"
+              f"{str(v('drive_dist') or '-'):>7}"
+              f"{str(v('putts_gir') or '-'):>7}")
