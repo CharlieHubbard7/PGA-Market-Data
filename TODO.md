@@ -8,7 +8,10 @@ Work through these sequentially. Each phase builds on the last.
 
 **Live in the running app (`server.py`):** Kalshi WS feed + ESPN leaderboard + **Polymarket WS feed** → dashboard. The table now has **separate K/P columns** (K Bid, P Bid, K Ask, P Ask, K Vol, P Vol), a **Speed** column (per-venue freshness dot + updates/min), and a freshness-aware **Arb** column. All verified; Kalshi unaffected. Polymarket behind a `POLY_ENABLED` flag.
 
-**🎉 Phase 3 is essentially complete.** Remaining polish only (see below).
+**Phase 3 (Polymarket + arb) is complete.** Current focus shifts to **data richness + presentation**, NOT a model:
+- Phase 3.5 — Polymarket single-price column (highlighted) + capture last_trade_price + best-odds/line-shopping highlight + detail-chart fix + Kalshi volume-units fix.
+- Phase 3.6 — NEW data source: player recent-form (last 1/3/5 starts, z-score) — research spike first.
+- Phase 5 — predictive model: DEFERRED, way down the line (Charlie's call).
 
 **Reference scripts (standalone):**
 - `arbitrage.py` — arb math, 10/10 self-tests; the dashboard has a JS port that must stay in sync. Assumptions in its docstring (#1 resolution rules ✅ verified).
@@ -80,11 +83,7 @@ Work through these sequentially. Each phase builds on the last.
 
 - [x] **Map Kalshi ↔ Polymarket markets** — DONE by reusing `leaderboard.py` normalize + fuzzy matching (no separate mapping table needed — both use the "Will X win" format). Coverage proven: 71/72 real players (probe), 67 quotable-on-both (arb scan). Remaining mismatches are Polymarket-only (Jake Knapp) / Kalshi-only (Sudarshan Yellamaraju) / scaffolding markets.
 
-- [ ] **Combined columns layout (Charlie's design)** — Do NOT add separate standalone Polymarket columns. Instead, group the two exchanges side by side under each metric so they're directly comparable:
-  - **Bid:** Kalshi bid and Polymarket bid together (labeled K / P)
-  - **Ask:** Kalshi ask and Polymarket ask together (labeled K / P)
-  - **Volume:** Kalshi volume and Polymarket volume together (labeled K / P)
-  - Likely a two-line cell or `K: __ / P: __` sub-layout per column. The point is at-a-glance cross-exchange comparison on the same row.
+- [x] ~~**Combined columns layout**~~ — Superseded. Started stacked, then Charlie chose **separate** sortable K/P columns (done — see "K/P columns in dashboard" below).
 
 - [x] **Arbitrage detector (math)** — DONE + TESTED in `arbitrage.py` (standalone). Pure `best_arb()` compares both directions (arb exists when one venue's BID > other's ASK), nets out fees, returns the better. 10/10 self-tests pass (`python3 arbitrage.py --test`) — caught a real float-rounding bug in the Kalshi fee. Live scan (`python3 arbitrage.py`) joins 67 matched markets and flags net-positive edges; on current data the best is sub-cent (no meaningful free money — expected for a liquid favorite market). **Full assumptions list now lives in the `arbitrage.py` module docstring.**
 
@@ -100,13 +99,41 @@ Work through these sequentially. Each phase builds on the last.
 
 ---
 
-## Phase 4 — Model Foundation
+## Phase 3.5 — Make it feel alive · best-odds · cleaner charts (CURRENT FOCUS)
 
-- [ ] **Confirm `count` field** — Log a raw Kalshi trade message to verify the actual field names available. Update `handle_trade` in `feed.py` to capture all available fields. This affects the volume column accuracy.
+Charlie's goal: get every data source flowing and presented well. Descriptive/real-time only — **no predictive model now** (that's deferred, see Phase 5).
 
-- [ ] **Feature engineering script** — Write `features.py` that queries `kalshi_data.db` and builds a labeled dataset: for each market, at each point in time, what were the features (bid, ask, spread, volume rate, leaderboard position, holes remaining) and what was the outcome (did this player win?).
+- [ ] **Polymarket single "price" column (highlighted)** — Polymarket's app shows ONE number, not a bid/ask. Add a visually highlighted column with that number. Plan: use the live **midpoint** = (poly_bid + poly_ask)/2 (matches their implied-probability display; updates whenever the book moves), optionally toggle to **last trade price**. Add a Kalshi mid alongside so the single numbers are directly comparable.
 
-- [ ] **Baseline model** — Train a simple logistic regression or gradient boosted model on completed tournament data. Compare predicted probability to Kalshi's implied probability to identify systematic mispricings.
+- [ ] **Capture `last_trade_price` (both venues)** — Polymarket's WS sends `last_trade_price` on every trade and we currently IGNORE it; Kalshi trades carry price too. Capturing it (a) feeds the single-price column and (b) makes the number tick as often as Polymarket's own app. ⚠️ Reality check: both feeds are ALREADY real-time WebSockets — there is no polling bottleneck on prices (ESPN 30s + Gamma 10min are metadata only). "Update faster" = surface the trade-frequency number, not re-architect.
+
+- [ ] **Best-odds / line-shopping highlight (where Polymarket beats Kalshi)** — NOT arb. Per player, highlight which venue gives the better price: best to BUY YES = min(K ask, P ask); best to SELL YES = max(K bid, P bid). Color the winning venue's cell + a "Best: P/K" cue. This is the everyday "who has the better odds right now" signal — far more often actionable than risk-free arb.
+
+- [ ] **Fix the detail (big) chart** — Root cause confirmed: `openDetail` plots the ENTIRE in-memory deque (up to 300 ticks ≈ 20+ min at golf tick rates) with no time trim, while the small sparkline uses ~20 points — so the big chart looks long/noisy (see Tommy Fleetwood). Plan: (a) trim to a real, labeled window + range buttons (5m / 30m / all); (b) drop garbage / duplicate-timestamp points causing vertical staircases; (c) **overlay Polymarket price history** so you can SEE K vs P diverge (needs `/api/poly-history/{ticker}` backed by `poly_ticks`); (d) show P bid/ask/price in the detail panel too.
+
+- [ ] **Fix Kalshi volume units** — Kalshi "volume" is currently `trade_counts` since server start, while Polymarket is cumulative USD — K Vol vs P Vol is apples-to-oranges. Use Kalshi `volume_fp` / `volume_24h_fp` from REST so the columns are comparable. (Was the old Phase 4 "count" task — it's data plumbing, lives here now.)
+
+---
+
+## Phase 3.6 — Player performance / recent form (NEW data source)
+
+Goal: quantify how well each player is ACTUALLY playing — last 1 / last 3 / last 5 starts — and normalize across the field (z-score) to help judge a player's "proper value." Descriptive analytics, **not** a model.
+
+- [ ] **Research spike: what recent-form data can we actually get?** — Standalone probe (like the Polymarket one): try ESPN's golf API for per-player recent results (athlete results / event history). Output a coverage report: how many of our 72 players we can get form for, and which fields (finish position, scoring avg, strokes-gained if available). NOTE: ESPN is free but may be thin; **DataGolf** is the gold standard for strokes-gained/form but is paid — flag as the upgrade path if ESPN isn't enough. Pick the source AFTER seeing what ESPN gives.
+
+- [ ] **`form.py` module** — Pull recent results per player; compute last-1 / last-3 / last-5 metrics (avg finish, scoring avg, …) and a **z-score normalized across the field**; store in a new SQLite table; refresh ~daily (form changes slowly). Match players via the same `leaderboard.py` fuzzy logic.
+
+- [ ] **Form columns + detail** — Add recent-form columns (e.g., L5 finish, form z-score) to the table + a fuller breakdown in the detail panel.
+
+- [ ] **(Optional) in-tournament momentum** — Reuse the live ESPN leaderboard (position/score/thru over time) as a current-event momentum signal.
+
+---
+
+## Phase 5 — Predictive model (DEFERRED — way down the line, per Charlie)
+
+Explicitly NOT now. Get all data sources flowing + well-presented first. Recorded only so the eventual path exists:
+- Feature engineering from `kalshi_data.db` + `poly_ticks` + leaderboard + form.
+- Baseline model comparing predicted vs market-implied probability to flag mispricings.
 
 ---
 
