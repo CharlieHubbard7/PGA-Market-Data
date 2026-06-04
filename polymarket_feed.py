@@ -127,7 +127,12 @@ async def refresh_poly_markets_loop():
                 if not cid:
                     continue
                 if cid in poly_markets:
-                    poly_markets[cid]["volume"] = r["volume"]          # refresh metadata only
+                    # refresh metadata + the Gamma marks (last/mid) for markets that
+                    # don't trade over the WS, so the price stays current.
+                    poly_markets[cid]["volume"] = r["volume"]
+                    poly_markets[cid]["yes_mid"] = r.get("yes_mid")
+                    if r.get("yes_last") is not None:
+                        poly_markets[cid]["yes_last"] = r["yes_last"]
                 else:
                     poly_markets[cid] = r                              # seed new market
                 tok = _yes_token(r)

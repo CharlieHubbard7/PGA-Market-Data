@@ -54,17 +54,31 @@ _EMPTY_POLY = {k: None for k in _POLY_KEYS}
 
 def _poly_record(pm: dict) -> dict:
     """Serialize a poly market dict into the wire fields the dashboard expects.
-    poly_price = the displayed single number = midpoint of best bid/ask, which
-    equals Polymarket's own published mark (outcomePrices) == the app's number.
-    Falls back to last trade / Gamma price when the book is one-sided."""
-    bid, ask = pm.get("yes_bid"), pm.get("yes_ask")
-    if bid is not None and ask is not None:
-        price = (bid + ask) / 2
+
+    poly_price = the LAST TRADE price, clamped into the current [bid, ask].
+    Rationale (verified on Pierceson Coody): the naive midpoint is garbage on
+    one-sided books — no bid + a 16c ask gives mid=8c, but the market last traded
+    at 0.1c and the app shows ~0.1c. Last-trade is what actually changed hands;
+    clamping into the book keeps it sane if the book has since moved away.
+    Falls back to midpoint only when there is no trade and a two-sided book."""
+    bid, ask, last = pm.get("yes_bid"), pm.get("yes_ask"), pm.get("yes_last")
+    if last is not None:
+        price = last                                   # what actually traded...
+        if ask is not None:
+            price = min(price, ask)                    # ...clamped into the current book
+        if bid is not None:
+            price = max(price, bid)
+    elif bid is not None and ask is not None:
+        # No trade history: midpoint only if the book is tight enough to be meaningful;
+        # on a wide spread the mid is garbage, so use the bid (the buyers' floor).
+        price = (bid + ask) / 2 if (ask - bid) <= 0.05 else bid
+    elif bid is not None:
+        price = bid
     else:
-        price = pm.get("yes_last") if pm.get("yes_last") is not None else pm.get("yes_mid")
+        price = None                                   # no trade + no bid → genuinely unknown
     return {
         "poly_bid": bid, "poly_ask": ask,
-        "poly_volume": pm.get("volume"), "poly_last": pm.get("yes_last"),
+        "poly_volume": pm.get("volume"), "poly_last": last,
         "poly_mid": pm.get("yes_mid"), "poly_price": price,
     }
 
