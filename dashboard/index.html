@@ -350,7 +350,7 @@
           <th data-col="kPriceVal"   data-arrow="↑" class="k-price"    title="Kalshi price — (bid+ask)/2">K Price</th>
           <th data-col="polyPriceVal" data-arrow="↑" class="poly-price" title="Polymarket price — mid when spread ≤10¢, else last trade">P Price</th>
           <th data-col="truePriceVal" data-arrow="↑" class="true-price" title="Blended consensus — K and P weighted by update rate">True</th>
-          <th data-col="volume_fp"   data-arrow="↑" class="col-k">K Vol</th>
+          <th data-col="volume"      data-arrow="↑" class="col-k">K Vol</th>
           <th data-col="poly_volume" data-arrow="↑" class="col-p">P Vol</th>
           <th>Speed</th>
           <th data-col="arbNet"      data-arrow="↑">Arb</th>
@@ -509,12 +509,16 @@ function onTrade(msg) {
   if (!m) return;
 
   m.volume = (m.volume || 0) + (msg.count || 1);
-  // Increment volume_fp live using price × count (in dollars)
-  if (msg.price != null && msg.count) m.volume_fp = (m.volume_fp || 0) + msg.price * msg.count;
+  // Keep the last-trade price fresh so K Price tracks Kalshi's displayed price.
+  if (msg.price != null && msg.price > 0) {
+    m.yes_last = msg.price;
+    const kpEl = document.getElementById(`kprice-${msg.ticker}`);
+    if (kpEl) kpEl.textContent = fmtPrice(kPrice(m));
+  }
   totalTrades++;
 
   const volEl = document.getElementById(`vol-${CSS.escape(msg.ticker)}`);
-  if (volEl) volEl.textContent = fmtUsd(m.volume_fp);
+  if (volEl) volEl.textContent = fmtVol(m.volume);
 
   document.getElementById('statTrades').textContent = totalTrades.toLocaleString();
 
@@ -569,18 +573,31 @@ function polyPrice(m) {
 
 
 // ── price helpers ─────────────────────────────────────────────────────────────
+// K Price mirrors how Kalshi's own site shows a price (and the Polymarket rule):
+//   • both sides quoted → midpoint (Kalshi books are tight, so mid ≈ the app)
+//   • one-sided book     → last traded price (what Kalshi displays for longshots
+//                          with an ask but no bid)
+//   • else               → whichever single side exists
 function kPrice(m) {
-  if (m.yes_bid == null || m.yes_ask == null) return null;
-  return (m.yes_bid + m.yes_ask) / 2;
+  const b = m.yes_bid, a = m.yes_ask;
+  const hasB = b != null && b > 0, hasA = a != null && a > 0;
+  if (hasB && hasA) return (b + a) / 2;
+  if (m.yes_last != null && m.yes_last > 0) return m.yes_last;
+  if (hasA) return a;
+  if (hasB) return b;
+  return null;
 }
 
-// Confidence CSS class based on spread width
+// Confidence: a one-sided book is low-confidence regardless of nominal spread.
 function kConfClass(m) {
-  const s = (m.yes_ask != null && m.yes_bid != null) ? m.yes_ask - m.yes_bid : null;
-  if (s == null) return 'conf-none';
-  if (s <= 0.05) return '';            // ≤5¢ tight — no class needed, full opacity
-  if (s <= 0.15) return 'conf-medium'; // 5-15¢
-  return 'conf-wide';                  // >15¢ — don't trust the mid
+  const b = m.yes_bid, a = m.yes_ask;
+  const hasB = b != null && b > 0, hasA = a != null && a > 0;
+  if (!hasB && !hasA) return 'conf-none';
+  if (!hasB || !hasA) return 'conf-wide';   // missing a side → trust the number less
+  const s = a - b;
+  if (s <= 0.05) return '';
+  if (s <= 0.15) return 'conf-medium';
+  return 'conf-wide';
 }
 function pConfClass(m) {
   const s = (m.poly_ask != null && m.poly_bid != null) ? m.poly_ask - m.poly_bid : null;
@@ -664,7 +681,7 @@ function rowHTML(m) {
       <td class="k-price ${kConfClass(m)}${bv === 'k' ? ' best-ask' : ''}" id="kprice-${m.ticker}">${fmtPrice(kPrice(m))}</td>
       <td class="poly-price ${pConfClass(m)}${bv === 'p' ? ' best-ask' : ''}" id="pprice-${m.ticker}">${fmtPrice(polyPrice(m))}</td>
       <td class="true-price" id="trueprice-${m.ticker}">${fmtPrice(truePrice(m))}</td>
-      <td class="vol-cell"   id="vol-${m.ticker}">${fmtUsd(m.volume_fp)}</td>
+      <td class="vol-cell"   id="vol-${m.ticker}">${fmtVol(m.volume)}</td>
       <td class="vol-cell"   id="pvol-${m.ticker}">${fmtUsd(m.poly_volume)}</td>
       <td class="speed-cell">
         <div class="kp-row"><span class="kp-tag k">K</span><span class="fdot fresh-none" id="kdot-${m.ticker}">●</span><span class="rate" id="krate-${m.ticker}">—</span></div>
@@ -708,13 +725,23 @@ function updateRow(ticker, prevBid) {
 }
 
 // ── sparkline ─────────────────────────────────────────────────────────────────
+// Per-tick price: midpoint when two-sided, else whichever side exists. This is the
+// same notion as K Price, so the trend line is meaningful even for no-bid longshots
+// (plotting raw bid left them as a flat line at zero).
+function tickPrice(p) {
+  const hasB = p.bid != null && p.bid > 0, hasA = p.ask != null && p.ask > 0;
+  if (hasB && hasA) return (p.bid + p.ask) / 2;
+  if (hasA) return p.ask;
+  if (hasB) return p.bid;
+  return null;
+}
 function sparkSVG(hist) {
-  if (hist.length < 2) return '<svg width="80" height="28"></svg>';
-  const vals  = hist.map(p => p.bid);
+  const vals = (hist || []).map(tickPrice).filter(v => v != null);
+  if (vals.length < 2) return '<svg width="80" height="28"></svg>';
   const min   = Math.min(...vals);
   const max   = Math.max(...vals);
   const range = max - min || 0.0001;
-  const W = 80, H = 28, pad = 2;
+  const W = 80, H = 28, pad = 3;
 
   const pts = vals.map((v, i) => {
     const x = pad + (i / (vals.length - 1)) * (W - pad * 2);
@@ -723,7 +750,7 @@ function sparkSVG(hist) {
   }).join(' ');
 
   const color = vals[vals.length - 1] >= vals[0] ? '#3fb950' : '#f85149';
-  return `<svg width="${W}" height="${H}"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+  return `<svg width="${W}" height="${H}"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
 }
 
 // ── detail panel ──────────────────────────────────────────────────────────────
@@ -763,7 +790,7 @@ function updateDetailPrices(m) {
   document.getElementById('detailAsk').textContent  = fmtPrice(m.yes_ask);
   document.getElementById('detailPBid').textContent = fmtPrice(m.poly_bid);
   document.getElementById('detailPAsk').textContent = fmtPrice(m.poly_ask);
-  document.getElementById('detailVol').textContent  = fmtUsd(m.volume_fp) || (m.volume || 0).toLocaleString();
+  document.getElementById('detailVol').textContent  = (m.volume || 0).toLocaleString();
 }
 
 function buildChart(hist) {

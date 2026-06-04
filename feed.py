@@ -89,7 +89,9 @@ async def refresh_markets_loop():
                         "event_ticker": m["event_ticker"],
                         "yes_bid":      float(m.get("yes_bid_dollars") or m.get("yes_bid") or 0),
                         "yes_ask":      float(m.get("yes_ask_dollars") or m.get("yes_ask") or 0),
-                        "volume_fp":    float(m.get("volume_fp") or 0),
+                        # last traded price — Kalshi's site shows this when a book is
+                        # one-sided (a longshot with an ask but no bid). 0 if never traded.
+                        "yes_last":     float(m.get("last_price_dollars") or 0),
                     }
             db.upsert_markets(list(markets.values()))
             print(f"[feed] {len(markets)} markets loaded")
@@ -127,6 +129,8 @@ async def _on_trade(msg: dict):
     ts    = time.time()
 
     trade_counts[ticker] += count if count else 1
+    if ticker in markets and price:
+        markets[ticker]["yes_last"] = price          # keep last-trade fresh for K Price
     db.write_trade(ticker, side, price, count)
 
     await _broadcast({"type": "trade", "ticker": ticker,
