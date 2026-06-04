@@ -23,6 +23,7 @@ Kalshi WS  ──►  feed.py  ──►  db.py (SQLite: kalshi_data.db)
 
 - **feed.py** — owns the Kalshi WebSocket connection, all shared state (`markets`, `ticks`, `trade_counts`, `broadcast_clients`), and all DB writes. Two async tasks: `refresh_markets_loop` (REST poll every 10 min) and `run_feed` (WS listener).
 - **leaderboard.py** — polls ESPN's public golf scoreboard every 60s (`refresh_leaderboard_loop`), parses position/score/thru, and joins each player to a Kalshi market. Matching (`match()`) is exact-normalized-name first, then a last-name + first-initial fuzzy fallback; `normalize_name` transliterates special letters (Højgaard → hojgaard). Annotates `feed.markets` in place with `pos`/`score`/`thru` and broadcasts a per-ticker map (`type: "leaderboard"`). The browser never re-matches names — it just applies what the server sends.
+- **model.py** — DataGolf model win-probability feed (Phase 4, paid API). `refresh_model_loop` every 120s pulls in-play (falls back to pre-tournament) win probs, normalizes to 0–1 (a price: 0.185 → 18.5¢), matches to the field via the leaderboard fuzzy matcher, annotates `feed.markets["...model"]`, broadcasts `type:"model"`, stores in `model_preds`. **All DataGolf-specifics are isolated to `_fetch_raw()` + `_parse()`** — swap those two to change provider. Needs `DATAGOLF_API_KEY` in `.env`; no key = graceful no-op. Dashboard shows Model price + a freshness clock + a live Δ (Model − True) coloured green/red.
 - **form.py** — player recent-form from ESPN + **OWGR world ranking**, Phase 3.6. **OWGR comes from the modern owgr.com JSON API** (`apiweb.owgr.com/api/owgr/rankings/getRankings?pageSize=1000&...` — `rankingsList[].rank` + `player.fullName`; top-1000 covers any field; no scraping, the old BeautifulSoup approach is obsolete). Matched to the field via the leaderboard fuzzy matcher (72/72). ESPN itself exposes NO world ranking. `refresh_form_loop` every 6h (form moves between events). The PGA scoreboard `competitor.id` IS the ESPN athlete id, so the live field maps for free; one GET per player to `/athletes/{id}/overview` yields last-5 finishes (L1/L3/L5), season splits (events/cuts/top10/wins/scoring avg), and `seasonRankings.categories` (driving dist/acc, GIR, putts/GIR, birdies/rnd, money rank — the free Strokes-Gained proxies; ESPN has NO real SG or OWGR free). `build_form()` computes field z-scores + a composite `form_score` (mean of avg-L5-z & scoring-avg-z, both inverted so high = good). Annotates `feed.markets["...form"]`, broadcasts `type:"form"`, stored in the `form` table. Reuses leaderboard's fuzzy matching. Excludes the in-progress event so L1/L3/L5 are completed starts only. Coverage on Memorial: 72/72 (scoring avg 70/72 — Rory + A.Fitzpatrick under a non-PGA split). Probe: `form_probe.py`.
 - **db.py** — thin SQLite helpers. Writes are synchronous and called directly from async code (safe at PGA data rates). DB file: `kalshi_data.db`. Tables: `markets`, `ticks`, `trades`, `leaderboard`, `poly_markets`, `poly_ticks`.
 - **server.py** — FastAPI app. Starts feed + leaderboard tasks in `lifespan`. Exposes `/`, `/api/markets`, `/api/history/{ticker}`, `/api/leaderboard`, `/ws`.
@@ -37,9 +38,10 @@ Kalshi WS  ──►  feed.py  ──►  db.py (SQLite: kalshi_data.db)
 - Matching across exchanges reuses `leaderboard.py`'s `normalize_name` + fuzzy fallback (both venues phrase markets as "Will X win …").
 
 ## Credentials
-- `.env` — `KALSHI_API_KEY` and `KALSHI_PRIVATE_KEY_PATH`
+- `.env` — `KALSHI_API_KEY`, `KALSHI_PRIVATE_KEY_PATH`, and (optional) `DATAGOLF_API_KEY`
 - `kalshi_private_key.pem` — RSA private key
 - Both are gitignored. Never commit them.
+- **DataGolf model key:** add `DATAGOLF_API_KEY=...` to `.env` (loaded in `config.py`). Optional — without it `model.py` no-ops and the Model/Δ columns show "—"; nothing else breaks.
 
 ## Current tournament target
 `EVENT_TICKER = "KXPGATOUR-THMTPBW26"` (Memorial Tournament presented by Workday, 2026)

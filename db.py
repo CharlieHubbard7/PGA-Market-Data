@@ -88,7 +88,16 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_trades_ticker_ts ON trades(ticker, ts);
             CREATE INDEX IF NOT EXISTS idx_leaderboard_ts   ON leaderboard(ts);
             CREATE INDEX IF NOT EXISTS idx_poly_ticks_cid_ts ON poly_ticks(condition_id, ts);
+            CREATE TABLE IF NOT EXISTS model_preds (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts          REAL    NOT NULL,
+                ticker      TEXT    NOT NULL,
+                player_name TEXT,
+                win_prob    REAL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_form_ts          ON form(ts);
+            CREATE INDEX IF NOT EXISTS idx_model_ticker_ts  ON model_preds(ticker, ts);
         """)
         # Migrate an existing form table that predates the skill-stat columns.
         existing = {r[1] for r in conn.execute("PRAGMA table_info(form)")}
@@ -149,6 +158,17 @@ def write_poly_tick(condition_id: str, yes_bid, yes_ask, yes_mid, volume):
             "INSERT INTO poly_ticks (ts, condition_id, yes_bid, yes_ask, yes_mid, volume) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (time.time(), condition_id, yes_bid, yes_ask, yes_mid, volume),
+        )
+
+
+def write_model(updates: dict, markets: dict):
+    """Snapshot model win probabilities. `updates` is {ticker: {prob, updated}}."""
+    ts = time.time()
+    with _conn() as conn:
+        conn.executemany(
+            "INSERT INTO model_preds (ts, ticker, player_name, win_prob) VALUES (?, ?, ?, ?)",
+            [(ts, tk, (markets.get(tk) or {}).get("player"), rec.get("prob"))
+             for tk, rec in updates.items()],
         )
 
 

@@ -228,6 +228,17 @@
   .true-price   { background: rgba(255,255,255,.04); color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
   th.true-price { background: rgba(255,255,255,.04); color: var(--text); font-weight: 700; }
 
+  /* Model (DataGolf) price + its freshness clock + delta vs True */
+  .model-col    { background: rgba(210,153,34,.10); color: var(--yellow); }
+  .model-cell   { background: rgba(210,153,34,.07); color: var(--yellow); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .mdlage-cell  { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+  .mdlage-cell.stale { color: var(--red); }
+  th.delta-col  { background: rgba(255,255,255,.04); }
+  .delta-cell   { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .delta-pos    { color: var(--green); }
+  .delta-neg    { color: var(--red); }
+  .delta-none   { color: var(--border); }
+
   /* Confidence band: wide spread = price is less trustworthy */
   .conf-medium  { opacity: .65; }
   .conf-wide    { color: var(--muted) !important; opacity: .5; font-style: italic; }
@@ -442,6 +453,9 @@
           <th data-col="thruVal"     data-arrow="↑" title="Holes played this round">Thru</th>
           <th data-col="scoreVal"    data-arrow="↑" title="Score to par">Score</th>
           <th data-col="truePriceVal" data-arrow="↑" class="true-price" title="Blended consensus — K and P weighted by update rate">True</th>
+          <th data-col="modelVal"    data-arrow="↑" class="model-col" title="DataGolf model win probability, as a price (move the decimal)">Model</th>
+          <th title="Time since the Model value last updated">Mdl Age</th>
+          <th data-col="deltaVal"    data-arrow="↑" class="delta-col" title="Model price − True market price. Green = model rates higher than the market (potential value); red = lower.">Δ</th>
           <th data-col="formScoreVal" data-arrow="↑" class="form-col" title="Recent-form score: z vs the field (avg-L5 finish + scoring avg). Higher = hotter.">Form</th>
           <th>Speed</th>
           <th>5m Trend</th>
@@ -465,7 +479,7 @@
         </tr>
       </thead>
       <tbody id="marketTbody">
-        <tr><td colspan="26" class="empty">Waiting for data…</td></tr>
+        <tr><td colspan="29" class="empty">Waiting for data…</td></tr>
       </tbody>
     </table>
   </div>
@@ -536,6 +550,8 @@ function recomputeSortKeys() {
     m.kPriceVal    = kPrice(m)    ?? -1;
     m.polyPriceVal = polyPrice(m) ?? -1;
     m.truePriceVal = truePrice(m) ?? -1;
+    m.modelVal     = modelPrice(m) ?? -1;
+    m.deltaVal     = modelDelta(m) ?? -999;
     const f = m.form || {};
     m.formScoreVal = f.form_score ?? -99;     // missing form sorts to the bottom
     m.last1Val     = f.last1  ?? 9999;        // finishes: lower = better
@@ -585,6 +601,7 @@ function connect() {
     else if (msg.type === 'trade')       onTrade(msg);
     else if (msg.type === 'leaderboard') onLeaderboard(msg);
     else if (msg.type === 'form')        onForm(msg);
+    else if (msg.type === 'model')       onModel(msg);
     else if (msg.type === 'poly')        onPoly(msg);
   };
 }
@@ -608,6 +625,25 @@ function onLeaderboard(msg) {
   });
   recomputeSortKeys();
   renderTable();   // once per ~60s — cheap enough for a full re-render
+}
+
+function onModel(msg) {
+  // Server sends a per-ticker map: { ticker: {prob, updated} }
+  Object.entries(msg.markets || {}).forEach(([ticker, rec]) => {
+    const m = markets[ticker];
+    if (m) m.model = rec;
+  });
+  recomputeSortKeys();
+  Object.keys(msg.markets || {}).forEach(updateModelCells);
+}
+
+// Targeted refresh of the Model / Δ cells (delta also moves whenever K/P move).
+function updateModelCells(ticker) {
+  const m = markets[ticker]; if (!m) return;
+  const mEl = document.getElementById(`model-${ticker}`);
+  if (mEl) mEl.textContent = fmtPrice(modelPrice(m));
+  const dEl = document.getElementById(`delta-${ticker}`);
+  if (dEl) { dEl.textContent = fmtDelta(modelDelta(m)); dEl.className = `delta-cell ${deltaClass(m)}`; }
 }
 
 function onForm(msg) {
@@ -702,6 +738,7 @@ function onPoly(msg) {
 
   const tpEl = document.getElementById(`trueprice-${msg.ticker}`);
   if (tpEl) tpEl.textContent = fmtPrice(truePrice(m));
+  updateModelCells(msg.ticker);   // True moved → delta vs model moved
 
   // live detail panel + chart (P side)
   if (selectedTicker === msg.ticker) {
@@ -782,6 +819,36 @@ function truePrice(m) {
   return (kp * kr + pp * pr) / (kr + pr);
 }
 
+// ── model (DataGolf) helpers ────────────────────────────────────────────────────
+// Model win probability is already 0–1, i.e. the price (0.185 → 18.5¢).
+function modelPrice(m) { return (m.model && m.model.prob != null) ? m.model.prob : null; }
+// Δ = model price − true market price (0–1). Positive = model rates higher than market.
+function modelDelta(m) {
+  const mp = modelPrice(m), tp = truePrice(m);
+  return (mp == null || tp == null) ? null : mp - tp;
+}
+function deltaClass(m) {
+  const d = modelDelta(m);
+  if (d == null) return 'delta-none';
+  return d > 0 ? 'delta-pos' : d < 0 ? 'delta-neg' : '';
+}
+function fmtDelta(d) {
+  if (d == null) return '—';
+  const c = d * 100;
+  return (c > 0 ? '+' : '') + c.toFixed(1) + '¢';
+}
+// seconds since the model value was last refreshed (server sends epoch seconds)
+function modelAgeSec(m) {
+  if (!m.model || m.model.updated == null) return null;
+  return Date.now() / 1000 - m.model.updated;
+}
+function fmtAge(s) {
+  if (s == null) return '—';
+  if (s < 90)   return `${Math.round(s)}s`;
+  if (s < 5400) return `${Math.round(s / 60)}m`;
+  return `${Math.round(s / 3600)}h`;
+}
+
 // ── recent-form helpers ─────────────────────────────────────────────────────────
 function formClass(z) {
   if (z == null) return 'form-none';
@@ -827,7 +894,7 @@ function renderTable() {
   const tbody = document.getElementById('marketTbody');
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="26" class="empty">No markets match the filter.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="29" class="empty">No markets match the filter.</td></tr>`;
     document.getElementById('filterCount').textContent = '';
     return;
   }
@@ -858,6 +925,9 @@ function rowHTML(m) {
       <td class="thru-cell">${m.thru || '—'}</td>
       <td class="score-cell ${scoreClass}">${m.score || '—'}</td>
       <td class="true-price" id="trueprice-${m.ticker}">${fmtPrice(truePrice(m))}</td>
+      <td class="model-cell" id="model-${m.ticker}">${fmtPrice(modelPrice(m))}</td>
+      <td class="mdlage-cell" id="mdlage-${m.ticker}">—</td>
+      <td class="delta-cell ${deltaClass(m)}" id="delta-${m.ticker}">${fmtDelta(modelDelta(m))}</td>
       <td class="form-cell ${formClass(f.form_score)}" id="form-${m.ticker}">${fmtForm(f.form_score)}</td>
       <td class="speed-cell">
         <div class="kp-row"><span class="kp-tag k">K</span><span class="fdot fresh-none" id="kdot-${m.ticker}">●</span><span class="rate" id="krate-${m.ticker}">—</span></div>
@@ -905,6 +975,7 @@ function updateRow(ticker, prevBid) {
   // update True price
   const tpEl = document.getElementById(`trueprice-${ticker}`);
   if (tpEl) tpEl.textContent = fmtPrice(truePrice(m));
+  updateModelCells(ticker);   // True moved → delta vs model moved
 
   if (sparkEl) sparkEl.innerHTML = sparkSVG(tickHistory[ticker] || []);
 
@@ -1199,6 +1270,13 @@ function paintSpeed() {
       const r = rateMin(v, ticker);
       if (dot) dot.className = `fdot ${freshClass(ageSec(v, ticker))}`;
       if (rt)  rt.innerHTML = r ? `${r}<span class="unit">/m</span>` : '—';
+    }
+    // Model freshness clock (decays even with no new messages; red if very stale).
+    const ageEl = document.getElementById(`mdlage-${ticker}`);
+    if (ageEl) {
+      const age = modelAgeSec(markets[ticker]);
+      ageEl.textContent = fmtAge(age);
+      ageEl.classList.toggle('stale', age != null && age > 600);   // >10 min = stale
     }
     updateArb(ticker);   // refresh staleness flag on the arb cell over time
   }

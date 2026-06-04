@@ -10,6 +10,7 @@ import db
 import feed
 import form
 import leaderboard
+import model
 import polymarket_feed
 from leaderboard import normalize_name, _fuzzy_key
 
@@ -110,6 +111,11 @@ async def _broadcast_form():
     await feed._broadcast({"type": "form", "markets": form.form_by_ticker})
 
 
+async def _broadcast_model():
+    """Push the whole per-ticker model-probability map after each DataGolf refresh."""
+    await feed._broadcast({"type": "model", "markets": model.model_by_ticker})
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
@@ -118,6 +124,8 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(leaderboard.refresh_leaderboard_loop())
     form.on_update = _broadcast_form
     asyncio.create_task(form.refresh_form_loop())
+    model.on_update = _broadcast_model
+    asyncio.create_task(model.refresh_model_loop())
     if POLY_ENABLED:
         # Fault-isolated: these are independent tasks, and the feed's own loops
         # swallow their exceptions, so a Polymarket failure can't stop Kalshi.
@@ -157,6 +165,7 @@ async def get_markets():
             "thru":         m.get("thru", "—"),
             "round":        m.get("round", "—"),
             "form":         m.get("form"),
+            "model":        m.get("model"),
             **_poly_fields(ticker),
         })
     result.sort(key=lambda x: x["yes_bid"], reverse=True)
@@ -188,6 +197,12 @@ async def get_leaderboard():
 async def get_form():
     """Recent-form metrics keyed by Kalshi ticker."""
     return JSONResponse(form.form_by_ticker)
+
+
+@app.get("/api/model")
+async def get_model():
+    """Model win probabilities keyed by Kalshi ticker (+ last-updated epoch)."""
+    return JSONResponse({"updated": model.last_updated, "markets": model.model_by_ticker})
 
 
 @app.get("/api/poly")
@@ -227,6 +242,7 @@ async def ws_endpoint(websocket: WebSocket):
             "thru":        m.get("thru", "—"),
             "round":       m.get("round", "—"),
             "form":        m.get("form"),
+            "model":       m.get("model"),
             **_poly_fields(ticker),
         })
     await websocket.send_text(json.dumps({
