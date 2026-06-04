@@ -27,9 +27,13 @@ better of the two directions, net of fees.
 ASSUMPTIONS (each one is a way the "risk-free" edge could be wrong):
 
   Market equivalence
-    1. SAME outcome + SAME resolution rules across venues — identical handling
-       of playoffs, ties/dead-heats, withdrawals, DQs. *Biggest unverified one.*
-       (Next concrete task: diff Kalshi rules vs Polymarket `description`.)
+    1. SAME outcome + SAME resolution rules across venues. ✅ VERIFIED 2026-06-04:
+       both resolve YES iff the player is the official PGA Tour tournament winner
+       (playoff included), NO otherwise (incl. WD before tee-off / missed cut),
+       source pgatour.com, ~June 7 expiry. Only divergence: co-champions with NO
+       playoff (weather) — Polymarket breaks the tie alphabetically by last name,
+       Kalshi is silent. Effectively never on a standard Tour event. Treat as
+       same instrument.
     2. Name match == market match (67 paired via leaderboard.py fuzzy logic).
 
   Pricing & execution
