@@ -504,8 +504,9 @@ function onPoly(msg) {
   m.poly_bid    = msg.poly_bid;
   m.poly_ask    = msg.poly_ask;
   m.poly_volume = msg.poly_volume;
-  if (msg.poly_last != null) m.poly_last = msg.poly_last;
-  if (msg.poly_mid  != null) m.poly_mid  = msg.poly_mid;
+  if (msg.poly_last  != null) m.poly_last  = msg.poly_last;
+  if (msg.poly_mid   != null) m.poly_mid   = msg.poly_mid;
+  m.poly_price = msg.poly_price;
   // Targeted updates to the P rows (no full re-render), mirroring updateRow.
   const pb = document.getElementById(`pbid-${msg.ticker}`);
   const pa = document.getElementById(`pask-${msg.ticker}`);
@@ -524,8 +525,10 @@ function onPoly(msg) {
   updateArb(msg.ticker);
 }
 
-// The single Polymarket number: live midpoint, falling back to last trade / Gamma price.
+// The single Polymarket number: prefer the server's size-weighted microprice,
+// then live midpoint, then last trade / Gamma price.
 function polyPrice(m) {
+  if (m.poly_price != null) return m.poly_price;
   if (m.poly_bid != null && m.poly_ask != null) return (m.poly_bid + m.poly_ask) / 2;
   if (m.poly_last != null) return m.poly_last;
   if (m.poly_mid  != null) return m.poly_mid;

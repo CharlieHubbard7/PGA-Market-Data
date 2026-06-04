@@ -48,8 +48,25 @@ def _ensure_poly_map():
         _poly_map_built_for = n
 
 
-_EMPTY_POLY = {"poly_bid": None, "poly_ask": None, "poly_volume": None,
-               "poly_last": None, "poly_mid": None}
+_POLY_KEYS = ("poly_bid", "poly_ask", "poly_volume", "poly_last", "poly_mid", "poly_price")
+_EMPTY_POLY = {k: None for k in _POLY_KEYS}
+
+
+def _poly_record(pm: dict) -> dict:
+    """Serialize a poly market dict into the wire fields the dashboard expects.
+    poly_price = the displayed single number = midpoint of best bid/ask, which
+    equals Polymarket's own published mark (outcomePrices) == the app's number.
+    Falls back to last trade / Gamma price when the book is one-sided."""
+    bid, ask = pm.get("yes_bid"), pm.get("yes_ask")
+    if bid is not None and ask is not None:
+        price = (bid + ask) / 2
+    else:
+        price = pm.get("yes_last") if pm.get("yes_last") is not None else pm.get("yes_mid")
+    return {
+        "poly_bid": bid, "poly_ask": ask,
+        "poly_volume": pm.get("volume"), "poly_last": pm.get("yes_last"),
+        "poly_mid": pm.get("yes_mid"), "poly_price": price,
+    }
 
 
 def _poly_fields(ticker: str) -> dict:
@@ -59,24 +76,18 @@ def _poly_fields(ticker: str) -> dict:
         if tk == ticker:
             pm = polymarket_feed.poly_markets.get(cid)
             if pm:
-                return {"poly_bid": pm.get("yes_bid"), "poly_ask": pm.get("yes_ask"),
-                        "poly_volume": pm.get("volume"), "poly_last": pm.get("yes_last"),
-                        "poly_mid": pm.get("yes_mid")}
+                return _poly_record(pm)
             break
     return dict(_EMPTY_POLY)
 
 
-async def _broadcast_poly(cid, player, bid, ask, volume, last):
+async def _broadcast_poly(cid):
     _ensure_poly_map()
     tk = _cid_to_ticker.get(cid)
-    if not tk:
+    pm = polymarket_feed.poly_markets.get(cid)
+    if not tk or not pm:
         return
-    pm = polymarket_feed.poly_markets.get(cid) or {}
-    await feed._broadcast({
-        "type": "poly", "ticker": tk,
-        "poly_bid": bid, "poly_ask": ask, "poly_volume": volume,
-        "poly_last": last, "poly_mid": pm.get("yes_mid"),
-    })
+    await feed._broadcast({"type": "poly", "ticker": tk, **_poly_record(pm)})
 
 
 @asynccontextmanager
@@ -145,9 +156,7 @@ async def get_poly():
     for cid, tk in _cid_to_ticker.items():
         pm = polymarket_feed.poly_markets.get(cid)
         if pm:
-            out[tk] = {"poly_bid": pm.get("yes_bid"), "poly_ask": pm.get("yes_ask"),
-                       "poly_volume": pm.get("volume"), "poly_last": pm.get("yes_last"),
-                       "poly_mid": pm.get("yes_mid")}
+            out[tk] = _poly_record(pm)
     return JSONResponse(out)
 
 
