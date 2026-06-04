@@ -1,44 +1,52 @@
 """
-Polymarket feed — Phase 3, step 2.
+Polymarket feed — Phase 3, step 2 (real-time WebSocket version).
 
-Mirrors the shape of feed.py, but for Polymarket. Polymarket's Gamma API exposes
-bestBid/bestAsk/volume directly, so this is a POLLING feed (no WebSocket needed
-yet — the CLOB WS with clobTokenIds is a later optimization).
+Mirrors feed.py's two-task design:
+  - refresh_poly_markets_loop(): polls Gamma every 10 min to DISCOVER markets
+    (token ids, player names, seed prices). Metadata only — like feed.refresh_markets_loop.
+  - run_poly_feed(): connects to Polymarket's CLOB market-channel WebSocket and
+    streams live best bid/ask in real time — like feed.run_feed.
 
-STANDALONE for now — NOT imported by server.py. Run it directly to test:
+Why WebSocket, not polling: Polymarket's market channel pushes book / price_change /
+best_bid_ask events the instant the book moves (we measured ~10 msgs/sec on 6
+markets). Polling every 30s was a stopgap, never a Polymarket limit. The CLOB
+market channel needs NO auth; subscribe by token id (we have clobTokenIds), and
+send "PING" every 10s or the server drops the connection after ~10s.
 
-    python3 polymarket_feed.py          # one poll, prints a table
-    python3 polymarket_feed.py --loop   # runs the async poll loop (Ctrl-C to stop)
-
-Shared state (`poly_markets`, `poly_ticks`) and `refresh_poly_loop()` mirror
-feed.py's names so wiring into server.py later is mechanical. Player names are
-extracted with feed._player_name (same "Will X win" format as Kalshi), so the
-existing leaderboard.match() logic will join the two exchanges downstream.
+STANDALONE for now — NOT imported by server.py. Run directly:
+    python3 polymarket_feed.py          # one Gamma snapshot, prints a table
+    python3 polymarket_feed.py --loop   # live: Gamma discovery + WS stream (Ctrl-C)
 """
 
 import asyncio
 import json
 import re
+import ssl
 import time
 from collections import defaultdict, deque
 
+import certifi
 import requests
+import websockets
 
 import db
 import feed   # read-only reuse: _player_name
 
 GAMMA_URL       = "https://gamma-api.polymarket.com"
+WS_URL          = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 POLY_EVENT_SLUG = "2026-the-memorial-tournament-presented-by-workday-winner"
-POLL_SECONDS    = 30
+REFRESH_SECONDS = 600    # Gamma metadata refresh (discover new markets), NOT price cadence
+PING_SECONDS    = 10     # market channel drops the socket after ~10s without a PING
 TICK_MAXLEN     = 300
 
 # ── shared state (read by server.py later) ──────────────────────────────────────
-# poly_markets: condition_id → market dict
-# poly_ticks:   condition_id → deque of {ts, bid, ask, mid}
-poly_markets: dict[str, dict] = {}
-poly_ticks:   defaultdict[str, deque] = defaultdict(lambda: deque(maxlen=TICK_MAXLEN))
+# poly_markets:  condition_id → market dict (live yes_bid/yes_ask kept current by WS)
+# poly_ticks:    condition_id → deque of {ts, bid, ask}
+# _token_to_cid: YES token id → condition_id, for routing WS messages
+poly_markets:  dict[str, dict] = {}
+poly_ticks:    defaultdict[str, deque] = defaultdict(lambda: deque(maxlen=TICK_MAXLEN))
+_token_to_cid: dict[str, str] = {}
 
-# Polymarket pads negRisk events with scaffolding markets named "Player 0".."Player N".
 _PLACEHOLDER = re.compile(r"^player \d+$", re.I)
 
 
@@ -55,8 +63,22 @@ def _is_real_player(name: str) -> bool:
     return bool(name) and not _PLACEHOLDER.match(name) and name.lower() != "any other player"
 
 
+def _yes_token(market: dict) -> str | None:
+    """First clobTokenId is the YES token (matches outcomes order ["Yes","No"])."""
+    ids = market.get("clob_token_ids")
+    if isinstance(ids, str):
+        try:
+            ids = json.loads(ids)
+        except json.JSONDecodeError:
+            ids = None
+    return ids[0] if ids else None
+
+
+# ── discovery: Gamma REST (metadata + seed prices) ───────────────────────────────
+
 def fetch_markets() -> list[dict]:
-    """Pull the event from Gamma and return one row per real player market."""
+    """Pull the event from Gamma and return one row per real player market.
+    Used for discovery/seeding here, and directly by arbitrage.py / the probe."""
     resp = requests.get(f"{GAMMA_URL}/events", params={"slug": POLY_EVENT_SLUG}, timeout=20)
     resp.raise_for_status()
     data = resp.json()
@@ -68,10 +90,9 @@ def fetch_markets() -> list[dict]:
     for m in events[0].get("markets", []):
         if m.get("closed"):
             continue
-        player = feed._player_name(m.get("question", ""))   # "Will X win ..." -> "X"
+        player = feed._player_name(m.get("question", ""))
         if not _is_real_player(player):
             continue
-        # outcomePrices arrives as a JSON-encoded string: '["0.0095","0.9905"]'
         try:
             prices = json.loads(m.get("outcomePrices") or "[]")
         except (json.JSONDecodeError, TypeError):
@@ -81,37 +102,120 @@ def fetch_markets() -> list[dict]:
             "question":       m.get("question", ""),
             "player":         player,
             "event_slug":     POLY_EVENT_SLUG,
-            "yes_bid":        _f(m.get("bestBid")),                 # 0-1
-            "yes_ask":        _f(m.get("bestAsk")),                 # 0-1
-            "yes_mid":        _f(prices[0]) if prices else None,    # 0-1
+            "yes_bid":        _f(m.get("bestBid")),
+            "yes_ask":        _f(m.get("bestAsk")),
+            "yes_mid":        _f(prices[0]) if prices else None,
             "volume":         _f(m.get("volume")) or 0.0,
-            "clob_token_ids": m.get("clobTokenIds"),               # for future CLOB WS
+            "clob_token_ids": m.get("clobTokenIds"),
         })
     return rows
 
 
-# ── poll loop (every 30s) ────────────────────────────────────────────────────────
-
-async def refresh_poly_loop():
+async def refresh_poly_markets_loop():
+    """Discover markets + token ids every REFRESH_SECONDS. Seeds bid/ask on first
+    sight but does NOT overwrite live WS values on subsequent refreshes."""
     while True:
         try:
             rows = await asyncio.to_thread(fetch_markets)
-            ts = time.time()
             for r in rows:
                 cid = r["condition_id"]
                 if not cid:
                     continue
-                poly_markets[cid] = r
-                poly_ticks[cid].append(
-                    {"ts": ts, "bid": r["yes_bid"], "ask": r["yes_ask"], "mid": r["yes_mid"]}
-                )
-                db.write_poly_tick(cid, r["yes_bid"], r["yes_ask"], r["yes_mid"], r["volume"])
+                if cid in poly_markets:
+                    poly_markets[cid]["volume"] = r["volume"]          # refresh metadata only
+                else:
+                    poly_markets[cid] = r                              # seed new market
+                tok = _yes_token(r)
+                if tok:
+                    _token_to_cid[tok] = cid
             if rows:
                 db.upsert_poly_markets(rows)
-                print(f"[poly] {len(rows)} markets updated", flush=True)
+                print(f"[poly] {len(poly_markets)} markets known ({len(_token_to_cid)} tokens)", flush=True)
         except Exception as e:
-            print(f"[poly] refresh error: {e}", flush=True)
-        await asyncio.sleep(POLL_SECONDS)
+            print(f"[poly] market refresh error: {e}", flush=True)
+        await asyncio.sleep(REFRESH_SECONDS)
+
+
+# ── live: CLOB market-channel WebSocket ──────────────────────────────────────────
+
+async def run_poly_feed():
+    while not _token_to_cid:                      # wait for discovery to populate tokens
+        await asyncio.sleep(0.5)
+
+    ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+    backoff = 1
+    while True:
+        try:
+            async with websockets.connect(WS_URL, ssl=ssl_ctx) as ws:
+                tokens = list(_token_to_cid.keys())
+                await ws.send(json.dumps({
+                    "type": "market",
+                    "assets_ids": tokens,
+                    "custom_feature_enabled": True,   # enables best_bid_ask events
+                }))
+                print(f"[poly] WS connected — subscribed to {len(tokens)} tokens", flush=True)
+                backoff = 1
+                pinger = asyncio.create_task(_ping_loop(ws))
+                try:
+                    async for raw in ws:
+                        if raw == "PONG":
+                            continue
+                        data = json.loads(raw)
+                        for msg in (data if isinstance(data, list) else [data]):
+                            _on_message(msg)
+                finally:
+                    pinger.cancel()
+        except (websockets.ConnectionClosed, OSError) as e:
+            print(f"[poly] WS disconnected: {e}. Reconnecting in {backoff}s...", flush=True)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+
+
+async def _ping_loop(ws):
+    while True:
+        await asyncio.sleep(PING_SECONDS)
+        await ws.send("PING")
+
+
+def _on_message(msg: dict):
+    et = msg.get("event_type")
+    if et == "best_bid_ask":
+        _update(msg.get("asset_id"), msg.get("best_bid"), msg.get("best_ask"))
+    elif et == "price_change":
+        for pc in msg.get("price_changes", []):
+            _update(pc.get("asset_id"), pc.get("best_bid"), pc.get("best_ask"))
+    elif et == "book":
+        _update(msg.get("asset_id"),
+                _best_bid(msg.get("bids")), _best_ask(msg.get("asks")))
+    # ignored for now: new_market, tick_size_change, last_trade_price
+
+
+def _best_bid(levels):
+    prices = [float(l["price"]) for l in (levels or []) if l.get("price") is not None]
+    return max(prices) if prices else None
+
+
+def _best_ask(levels):
+    prices = [float(l["price"]) for l in (levels or []) if l.get("price") is not None]
+    return min(prices) if prices else None
+
+
+def _update(token, bid, ask):
+    """Update live bid/ask for a token's market. Writes a tick + DB row ONLY when
+    the best bid/ask actually moved (price_change fires on every order/cancel, so
+    this dedupe keeps writes proportional to real price movement)."""
+    cid = _token_to_cid.get(token)
+    if not cid or cid not in poly_markets:
+        return
+    m = poly_markets[cid]
+    new_bid = _f(bid) if bid is not None else m.get("yes_bid")
+    new_ask = _f(ask) if ask is not None else m.get("yes_ask")
+    if new_bid == m.get("yes_bid") and new_ask == m.get("yes_ask"):
+        return
+    m["yes_bid"], m["yes_ask"] = new_bid, new_ask
+    ts = time.time()
+    poly_ticks[cid].append({"ts": ts, "bid": new_bid, "ask": new_ask})
+    db.write_poly_tick(cid, new_bid, new_ask, m.get("yes_mid"), m.get("volume"))
 
 
 # ── standalone test entrypoint ────────────────────────────────────────────────
@@ -126,12 +230,16 @@ def _print_snapshot():
         print(f"{r['player'][:22]:22} | {c(r['yes_bid'])} {c(r['yes_ask'])} {c(r['yes_mid'])} | {r['volume']:10,.0f}")
 
 
+async def _run_live():
+    db.init_db()
+    await asyncio.gather(refresh_poly_markets_loop(), run_poly_feed())
+
+
 if __name__ == "__main__":
     import sys
     if "--loop" in sys.argv:
-        db.init_db()
         try:
-            asyncio.run(refresh_poly_loop())
+            asyncio.run(_run_live())
         except KeyboardInterrupt:
             print("\nstopped")
     else:
