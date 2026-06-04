@@ -65,7 +65,7 @@ Work through these sequentially. Each phase builds on the last.
   - **Volume:** Kalshi volume and Polymarket volume together (labeled K / P)
   - Likely a two-line cell or `K: __ / P: __` sub-layout per column. The point is at-a-glance cross-exchange comparison on the same row.
 
-- [ ] **Arbitrage detector** — Add an `arbitrage.py` module that compares bid/ask across exchanges and flags when the spread implies a risk-free (or near risk-free) opportunity. Push alerts to the dashboard via WebSocket with `type: "arb_alert"`. *(Validate the math on recorded/sample data before flagging anything live.)*
+- [~] **Arbitrage detector** — MATH DONE + TESTED in `arbitrage.py` (standalone). Pure `best_arb()` compares both directions (arb exists when one venue's BID > other's ASK), nets out fees, returns the better. 10/10 self-tests pass (`python3 arbitrage.py --test`) — caught a real float-rounding bug in the Kalshi fee. Live scan (`python3 arbitrage.py`) joins 67 matched markets and flags net-positive edges; on current data the best is sub-cent (no meaningful free money — as expected for a liquid favorite market). **Still TODO:** push `type: "arb_alert"` to the dashboard (deferred until the feed is wired into server.py). See the assumptions list in this session's notes / docstring.
 
 - [ ] **Arbitrage column in dashboard** — Add an "Arb" indicator column to the table. Highlight rows where a cross-exchange opportunity exists.
 
