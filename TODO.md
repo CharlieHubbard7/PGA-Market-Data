@@ -30,6 +30,12 @@ Work through these sequentially. Each phase builds on the last.
 
 ---
 
+## Known Bugs (small, fix anytime)
+
+- [ ] **Numeric column sort direction is inverted / arrows lie** — In `visibleMarkets()` the string branch uses `sortDir * va.localeCompare(vb)` (sortDir=1 → ascending) but the numeric branch uses `sortDir * (vb - va)` (sortDir=1 → descending). Opposite polarity, so Bid/Ask/Volume/Pos/Score sort the *wrong way* relative to the sort arrow, and clicking feels inconsistent vs the Player column. **One-line fix:** change `return sortDir * (vb - va);` to `return sortDir * (va - vb);` — then sortDir=-1 (↓) = descending for both numbers and strings, and the arrows tell the truth. (Noticed by Charlie on Bid/Ask headers.)
+
+---
+
 ## Phase 3 — Polymarket Integration (Arbitrage View)
 
 > ⚠️ **Methodology for this phase — agreed with Charlie.** What we have now works and must not break.
@@ -49,7 +55,7 @@ Work through these sequentially. Each phase builds on the last.
   - ⚠️ **Bug found:** Kalshi REST `/markets` returns `yes_bid_dollars`/`yes_ask_dollars`/`volume_fp` — NOT plain `yes_bid`/`yes_ask` (those are null). So `feed.refresh_markets_loop` currently seeds bid/ask = 0 until the first WS tick. Live dashboard is unaffected (WS corrects it fast) but the REST seed is wrong. CLAUDE.md's note is outdated. **Decide whether to fix feed.py.**
   - Note for the detector: real arb compares one book's ASK vs the other's BID (with fees), NOT mid-vs-mid. Polymarket spreads are very wide on thin markets, so mids are misleading.
 
-- [ ] **Build polymarket_feed.py** — Mirror the structure of `feed.py`. Connect to Polymarket's feed, subscribe to PGA Tour markets, store prices in a `poly_ticks` SQLite table. *(Test standalone first: confirm prices stream and persist correctly before touching the server.)*
+- [x] **Build polymarket_feed.py** — DONE, standalone (NOT yet imported by server.py). Polling feed (Gamma API gives bestBid/bestAsk/volume directly, so no CLOB WS needed yet). Mirrors feed.py: `poly_markets` dict, `poly_ticks` deques, `refresh_poly_loop()` (30s). Filters out Polymarket's scaffolding markets ("Player 0-19", "Any Other Player") → 72 real player markets. New SQLite tables `poly_markets` + `poly_ticks` (with `yes_bid`/`yes_ask`/`yes_mid`/`volume`). Verified: snapshot prints 72 markets; loop mode wrote 72 markets + 72 ticks to the DB. Run `python3 polymarket_feed.py` (snapshot) or `--loop`. **Next: wire `refresh_poly_loop()` into server.py lifespan + expose the data — but only after the arb math is trusted.**
 
 - [ ] **Map Kalshi ↔ Polymarket markets** — Build a mapping (JSON or DB table) pairing equivalent markets across exchanges. Hardest part — names and structures differ. **Reuse the proven matching approach from `leaderboard.py`** (normalize + fuzzy fallback) and produce a coverage report (X/Y markets matched) before relying on it.
 
