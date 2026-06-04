@@ -47,6 +47,10 @@ poly_markets:  dict[str, dict] = {}
 poly_ticks:    defaultdict[str, deque] = defaultdict(lambda: deque(maxlen=TICK_MAXLEN))
 _token_to_cid: dict[str, str] = {}
 
+# Optional async hook set by server.py: await on_update(condition_id, player, bid, ask, volume)
+# whenever a market's best bid/ask actually moves. Left None when run standalone.
+on_update = None
+
 _PLACEHOLDER = re.compile(r"^player \d+$", re.I)
 
 
@@ -162,7 +166,7 @@ async def run_poly_feed():
                             continue
                         data = json.loads(raw)
                         for msg in (data if isinstance(data, list) else [data]):
-                            _on_message(msg)
+                            await _on_message(msg)
                 finally:
                     pinger.cancel()
         except (websockets.ConnectionClosed, OSError) as e:
@@ -177,16 +181,16 @@ async def _ping_loop(ws):
         await ws.send("PING")
 
 
-def _on_message(msg: dict):
+async def _on_message(msg: dict):
     et = msg.get("event_type")
     if et == "best_bid_ask":
-        _update(msg.get("asset_id"), msg.get("best_bid"), msg.get("best_ask"))
+        await _update(msg.get("asset_id"), msg.get("best_bid"), msg.get("best_ask"))
     elif et == "price_change":
         for pc in msg.get("price_changes", []):
-            _update(pc.get("asset_id"), pc.get("best_bid"), pc.get("best_ask"))
+            await _update(pc.get("asset_id"), pc.get("best_bid"), pc.get("best_ask"))
     elif et == "book":
-        _update(msg.get("asset_id"),
-                _best_bid(msg.get("bids")), _best_ask(msg.get("asks")))
+        await _update(msg.get("asset_id"),
+                      _best_bid(msg.get("bids")), _best_ask(msg.get("asks")))
     # ignored for now: new_market, tick_size_change, last_trade_price
 
 
@@ -200,7 +204,7 @@ def _best_ask(levels):
     return min(prices) if prices else None
 
 
-def _update(token, bid, ask):
+async def _update(token, bid, ask):
     """Update live bid/ask for a token's market. Writes a tick + DB row ONLY when
     the best bid/ask actually moved (price_change fires on every order/cancel, so
     this dedupe keeps writes proportional to real price movement)."""
@@ -216,6 +220,14 @@ def _update(token, bid, ask):
     ts = time.time()
     poly_ticks[cid].append({"ts": ts, "bid": new_bid, "ask": new_ask})
     db.write_poly_tick(cid, new_bid, new_ask, m.get("yes_mid"), m.get("volume"))
+
+    # Notify the server (if wired) so it can broadcast to the dashboard. Guarded
+    # so a broadcast error can never kill the feed.
+    if on_update is not None:
+        try:
+            await on_update(cid, m["player"], new_bid, new_ask, m.get("volume"))
+        except Exception as e:
+            print(f"[poly] on_update hook error: {e}", flush=True)
 
 
 # ── standalone test entrypoint ────────────────────────────────────────────────

@@ -175,6 +175,14 @@
   .player-name  { font-weight: 500; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
   .price-cell   { font-variant-numeric: tabular-nums; }
   .vol-cell     { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* combined Kalshi/Polymarket cells — two stacked rows, K on top, P below */
+  .kp-cell      { font-variant-numeric: tabular-nums; line-height: 1.35; }
+  .kp-row       { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .kp-tag       { font-size: 9px; font-weight: 700; letter-spacing: .03em; width: 10px; display: inline-block; }
+  .kp-tag.k     { color: var(--blue); }
+  .kp-tag.p     { color: var(--purple); }
+  .kp-row.p     { color: var(--muted); }
   .pos-cell     { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 500; }
   .score-cell   { font-variant-numeric: tabular-nums; font-weight: 600; }
   .score-under  { color: var(--red); }    /* under par = lower is better, shown red like golf boards */
@@ -387,6 +395,7 @@ function connect() {
     else if (msg.type === 'ticker')      onTicker(msg);
     else if (msg.type === 'trade')       onTrade(msg);
     else if (msg.type === 'leaderboard') onLeaderboard(msg);
+    else if (msg.type === 'poly')        onPoly(msg);
   };
 }
 
@@ -452,6 +461,21 @@ function onTrade(msg) {
   }
 }
 
+function onPoly(msg) {
+  const m = markets[msg.ticker];
+  if (!m) return;
+  m.poly_bid    = msg.poly_bid;
+  m.poly_ask    = msg.poly_ask;
+  m.poly_volume = msg.poly_volume;
+  // Targeted updates to the P rows (no full re-render), mirroring updateRow.
+  const pb = document.getElementById(`pbid-${msg.ticker}`);
+  const pa = document.getElementById(`pask-${msg.ticker}`);
+  const pv = document.getElementById(`pvol-${msg.ticker}`);
+  if (pb) pb.textContent = fmtPrice(m.poly_bid);
+  if (pa) pa.textContent = fmtPrice(m.poly_ask);
+  if (pv) pv.textContent = fmtUsd(m.poly_volume);
+}
+
 // ── table rendering ───────────────────────────────────────────────────────────
 function visibleMarkets() {
   const q = document.getElementById('searchInput').value.toLowerCase();
@@ -499,9 +523,18 @@ function rowHTML(m) {
       <td class="player-name" title="${m.title}">${m.player}</td>
       <td class="pos-cell">${m.pos || '—'}</td>
       <td class="score-cell ${scoreClass}">${scoreTxt}</td>
-      <td class="price-cell" id="bid-${m.ticker}">${fmtPrice(m.yes_bid)}</td>
-      <td class="price-cell" id="ask-${m.ticker}">${fmtPrice(m.yes_ask)}</td>
-      <td class="vol-cell"  id="vol-${m.ticker}">${fmtVol(m.volume)}</td>
+      <td class="kp-cell">
+        <div class="kp-row"><span class="kp-tag k">K</span><span id="bid-${m.ticker}">${fmtPrice(m.yes_bid)}</span></div>
+        <div class="kp-row p"><span class="kp-tag p">P</span><span id="pbid-${m.ticker}">${fmtPrice(m.poly_bid)}</span></div>
+      </td>
+      <td class="kp-cell">
+        <div class="kp-row"><span class="kp-tag k">K</span><span id="ask-${m.ticker}">${fmtPrice(m.yes_ask)}</span></div>
+        <div class="kp-row p"><span class="kp-tag p">P</span><span id="pask-${m.ticker}">${fmtPrice(m.poly_ask)}</span></div>
+      </td>
+      <td class="kp-cell vol-cell">
+        <div class="kp-row"><span class="kp-tag k">K</span><span id="vol-${m.ticker}">${fmtVol(m.volume)}</span></div>
+        <div class="kp-row p"><span class="kp-tag p">P</span><span id="pvol-${m.ticker}">${fmtUsd(m.poly_volume)}</span></div>
+      </td>
       <td class="spark"     id="spark-${m.ticker}">${sparkSVG(tickHistory[m.ticker] || [])}</td>
     </tr>`;
 }
@@ -715,6 +748,8 @@ document.getElementById('searchInput').addEventListener('input', renderTable);
 // ── formatters ────────────────────────────────────────────────────────────────
 const fmtPrice = v => v != null ? `${(v * 100).toFixed(1)}¢` : '—';
 const fmtVol   = v => v ? v.toLocaleString() : '0';
+// Polymarket volume is cumulative USD (different unit than Kalshi's contract count).
+const fmtUsd   = v => v == null ? '—' : v >= 1000 ? `$${(v/1000).toFixed(1)}k` : `$${Math.round(v)}`;
 
 // ── init ──────────────────────────────────────────────────────────────────────
 // mark default sort header

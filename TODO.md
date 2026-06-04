@@ -6,11 +6,10 @@ Work through these sequentially. Each phase builds on the last.
 
 ## 📍 Current Status (2026-06-04)
 
-**Live in the running app (`server.py`):** Kalshi WS feed + ESPN leaderboard → dashboard. Working, verified.
+**Live in the running app (`server.py`):** Kalshi WS feed + ESPN leaderboard + **Polymarket WS feed** → dashboard. The table now shows combined **K/P bid/ask/volume** columns, live. All verified; Kalshi unaffected. Polymarket is behind a `POLY_ENABLED` flag in server.py.
 
-**Built + tested standalone, NOT yet wired into the app:**
-- `polymarket_feed.py` — real-time Polymarket prices via CLOB market-channel WebSocket (no auth; read-only). Discovery via Gamma REST.
-- `arbitrage.py` — cross-exchange arb math, 10/10 self-tests pass. Assumptions documented in its module docstring.
+**Built + tested standalone (not wired):**
+- `arbitrage.py` — cross-exchange arb math, 10/10 self-tests pass. Assumptions in its docstring (incl. #1 resolution rules ✅ verified). Next: drive an "Arb" dashboard column from it.
 - `polymarket_probe.py` — research/coverage script.
 
 **Decided:** 71/72 player mapping proven (reuses `leaderboard.py` matching). Polymarket needs no auth/keys for market data — and we deliberately don't use any (keeps the project un-tradeable). Real-time WS ≈ Kalshi (event-driven, sub-second); no meaningful lag.
@@ -89,9 +88,11 @@ Work through these sequentially. Each phase builds on the last.
 
 - [x] **🚧 GATE: Verify resolution-rule equivalence (assumption #1)** — ✅ PASSED (2026-06-04). Compared Kalshi `rules_primary`/`rules_secondary` vs Polymarket event/market `description`+`resolutionSource`. Both resolve YES iff the player is the official PGA Tour winner (playoff included), NO otherwise (incl. WD-before-tee-off / missed cut); source pgatour.com; ~June 7 expiry. Same instrument. Only divergence: co-champions with NO playoff (weather) — Polymarket alphabetical-by-last-name, Kalshi silent — effectively never. Cross-exchange comparison is apples-to-apples; arb math is meaningful. **Gate cleared → integration unblocked.**
 
-- [ ] **Wire Polymarket into server.py** — Add `refresh_poly_markets_loop()` + `run_poly_feed()` to the lifespan, **fault-isolated** (a Polymarket WS failure must NOT take down the Kalshi feed — wrap the tasks / guard the loops). Expose poly bid/ask to the dashboard (init snapshot + a `type:"poly"` broadcast keyed by Kalshi ticker via the existing name match).
+- [x] **Wire Polymarket into server.py** — DONE + verified. `refresh_poly_markets_loop()` + `run_poly_feed()` start in lifespan behind `POLY_ENABLED` flag (flip to False to fully disable). Fault-isolated: independent tasks + guarded loops + guarded `on_update` hook, so a Polymarket failure can't touch the Kalshi feed. Name→ticker bridge (`_rebuild_poly_map`, reuses leaderboard matching) maps poly condition_ids to Kalshi tickers; `polymarket_feed.on_update` broadcasts `type:"poly"` keyed by Kalshi ticker only when bid/ask moves. New `/api/poly` endpoint; init snapshot + `/api/markets` carry `poly_bid`/`poly_ask`/`poly_volume`. Verified: both feeds coexist (62 ticker + 71 poly broadcasts in 12s), 71/72 mapped, Kalshi unaffected.
 
-- [ ] **Combined K/P columns + Arb column in dashboard** — Implement Charlie's combined-column design (see above): Bid K/P, Ask K/P, Volume K/P side-by-side, plus an "Arb" indicator highlighting net-positive rows. Label clearly as informational until the resolution-rule gate passes.
+- [x] **Combined K/P columns in dashboard** — DONE. Bid / Ask / Volume are now two-line cells (K on top in blue, P below in purple), live-updated via `onPoly` (targeted DOM, no full re-render). ⚠️ **Caveat:** the Volume column mixes units — Kalshi = contract count since server start (a known limitation, see Phase 4 `count` task), Polymarket = cumulative USD ($k). Not directly comparable; revisit when Kalshi volume is fixed.
+
+- [ ] **Arb indicator column** — NOT STARTED (stopped here per Charlie). Add an "Arb" column driven by `arbitrage.best_arb()` on the live K/P prices, highlighting net-positive rows. Label as informational. Resolution-rule gate already passed, so the numbers are meaningful.
 
 ---
 
