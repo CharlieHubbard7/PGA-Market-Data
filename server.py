@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 import db
 import feed
+import form
 import leaderboard
 import polymarket_feed
 from leaderboard import normalize_name, _fuzzy_key
@@ -104,12 +105,19 @@ async def _broadcast_poly(cid):
     await feed._broadcast({"type": "poly", "ticker": tk, **_poly_record(pm)})
 
 
+async def _broadcast_form():
+    """Push the whole per-ticker form map after each (slow) ESPN refresh."""
+    await feed._broadcast({"type": "form", "markets": form.form_by_ticker})
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
     asyncio.create_task(feed.refresh_markets_loop())
     asyncio.create_task(feed.run_feed())
     asyncio.create_task(leaderboard.refresh_leaderboard_loop())
+    form.on_update = _broadcast_form
+    asyncio.create_task(form.refresh_form_loop())
     if POLY_ENABLED:
         # Fault-isolated: these are independent tasks, and the feed's own loops
         # swallow their exceptions, so a Polymarket failure can't stop Kalshi.
@@ -147,6 +155,7 @@ async def get_markets():
             "pos":          m.get("pos", "—"),
             "score":        m.get("score", "—"),
             "thru":         m.get("thru", "—"),
+            "form":         m.get("form"),
             **_poly_fields(ticker),
         })
     result.sort(key=lambda x: x["yes_bid"], reverse=True)
@@ -172,6 +181,12 @@ async def get_poly_history(ticker: str):
 @app.get("/api/leaderboard")
 async def get_leaderboard():
     return JSONResponse(leaderboard.board)
+
+
+@app.get("/api/form")
+async def get_form():
+    """Recent-form metrics keyed by Kalshi ticker."""
+    return JSONResponse(form.form_by_ticker)
 
 
 @app.get("/api/poly")
@@ -209,6 +224,7 @@ async def ws_endpoint(websocket: WebSocket):
             "pos":         m.get("pos", "—"),
             "score":       m.get("score", "—"),
             "thru":        m.get("thru", "—"),
+            "form":        m.get("form"),
             **_poly_fields(ticker),
         })
     await websocket.send_text(json.dumps({

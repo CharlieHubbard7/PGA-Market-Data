@@ -61,10 +61,27 @@ def init_db():
                 volume       REAL
             );
 
+            CREATE TABLE IF NOT EXISTS form (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts           REAL    NOT NULL,
+                athlete_id   TEXT,
+                player_name  TEXT    NOT NULL,
+                form_score   REAL,
+                avg_l5       REAL,
+                avg_l3       REAL,
+                last1        INTEGER,
+                made_cut_pct REAL,
+                scoring_avg  REAL,
+                top10        INTEGER,
+                wins         INTEGER,
+                events       INTEGER
+            );
+
             CREATE INDEX IF NOT EXISTS idx_ticks_ticker_ts  ON ticks(ticker, ts);
             CREATE INDEX IF NOT EXISTS idx_trades_ticker_ts ON trades(ticker, ts);
             CREATE INDEX IF NOT EXISTS idx_leaderboard_ts   ON leaderboard(ts);
             CREATE INDEX IF NOT EXISTS idx_poly_ticks_cid_ts ON poly_ticks(condition_id, ts);
+            CREATE INDEX IF NOT EXISTS idx_form_ts          ON form(ts);
         """)
 
 
@@ -118,4 +135,18 @@ def write_poly_tick(condition_id: str, yes_bid, yes_ask, yes_mid, volume):
             "INSERT INTO poly_ticks (ts, condition_id, yes_bid, yes_ask, yes_mid, volume) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (time.time(), condition_id, yes_bid, yes_ask, yes_mid, volume),
+        )
+
+
+def write_form(rows: list[dict]):
+    """Snapshot the field's recent-form metrics at one point in time."""
+    ts = time.time()
+    with _conn() as conn:
+        conn.executemany(
+            "INSERT INTO form (ts, athlete_id, player_name, form_score, avg_l5, avg_l3, "
+            "last1, made_cut_pct, scoring_avg, top10, wins, events) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [(ts, r.get("athlete_id"), r["name"], r.get("form_score"), r.get("avg_l5"),
+              r.get("avg_l3"), r.get("last1"), r.get("made_cut_pct"), r.get("scoring_avg"),
+              r.get("top10"), r.get("wins"), r.get("events")) for r in rows],
         )

@@ -228,6 +228,30 @@
   .score-over   { color: var(--muted); }
   .score-even   { color: var(--text); }
 
+  /* recent-form columns */
+  th.form-col   { background: rgba(63,185,80,.07); }
+  .form-cell    { font-variant-numeric: tabular-nums; font-weight: 700; background: rgba(63,185,80,.06); }
+  .form-hot     { color: var(--green); }
+  .form-warm    { color: #8fd99a; }
+  .form-cool    { color: var(--muted); }
+  .form-cold    { color: var(--red); }
+  .form-num     { font-variant-numeric: tabular-nums; color: var(--text); }
+  .form-muted   { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .sg-cell      { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .sg-cell b    { color: var(--text); font-weight: 600; }
+  .form-none    { color: var(--border); }
+
+  /* detail panel: recent-form breakdown */
+  .detail-form  { padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .detail-form .df-title { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+  .detail-form .df-grid  { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
+  .detail-form .df-row   { display: flex; justify-content: space-between; }
+  .detail-form .df-row span:first-child { color: var(--muted); }
+  .detail-form .df-row b  { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .detail-form .df-recent { margin-top: 8px; color: var(--muted); font-size: 11px; }
+  .detail-form .df-recent b { color: var(--text); font-weight: 600; }
+  .detail-form .df-empty { color: var(--muted); }
+
   @keyframes flash-green { from { background: rgba(63,185,80,.3); } to { background: transparent; } }
   @keyframes flash-red   { from { background: rgba(248,81,73,.3); } to { background: transparent; } }
   .flash-up   { animation: flash-green .7s ease-out; }
@@ -393,6 +417,10 @@
           <th data-col="kPriceVal"   data-arrow="↑" class="k-price"    title="Kalshi price — (bid+ask)/2">K Price</th>
           <th data-col="polyPriceVal" data-arrow="↑" class="poly-price" title="Polymarket price — mid when spread ≤10¢, else last trade">P Price</th>
           <th data-col="truePriceVal" data-arrow="↑" class="true-price" title="Blended consensus — K and P weighted by update rate">True</th>
+          <th data-col="formScoreVal" data-arrow="↑" class="form-col" title="Recent-form score: z vs the field (avg-L5 finish + scoring avg). Higher = hotter.">Form</th>
+          <th data-col="avgL5Val"    data-arrow="↑" title="Average finish over last 5 starts (lower = better)">L5</th>
+          <th data-col="cutPctVal"   data-arrow="↑" title="Season made-cut %">Cut%</th>
+          <th data-col="sgRankVal"   data-arrow="↑" title="ESPN season tour ranks — GIR / Putts-per-GIR (free Strokes-Gained proxy; lower = better)">SG</th>
           <th data-col="volume"      data-arrow="↑" class="col-k">K Vol</th>
           <th data-col="poly_volume" data-arrow="↑" class="col-p">P Vol</th>
           <th>Speed</th>
@@ -401,7 +429,7 @@
         </tr>
       </thead>
       <tbody id="marketTbody">
-        <tr><td colspan="11" class="empty">Waiting for data…</td></tr>
+        <tr><td colspan="15" class="empty">Waiting for data…</td></tr>
       </tbody>
     </table>
   </div>
@@ -432,6 +460,7 @@
         <span id="detailPBA" style="font-size:13px">—</span>
       </div>
     </div>
+    <div class="detail-form" id="detailForm"></div>
     <div class="chart-ranges">
       <button data-range="300"      class="active">5m</button>
       <button data-range="1800">30m</button>
@@ -468,6 +497,11 @@ function recomputeSortKeys() {
     m.kPriceVal    = kPrice(m)    ?? -1;
     m.polyPriceVal = polyPrice(m) ?? -1;
     m.truePriceVal = truePrice(m) ?? -1;
+    const f = m.form || {};
+    m.formScoreVal = f.form_score ?? -99;     // missing form sorts to the bottom
+    m.avgL5Val     = f.avg_l5 ?? 9999;        // lower = better finish
+    m.cutPctVal    = f.made_cut_pct ?? -1;
+    m.sgRankVal    = sgRankVal(m);            // lower = better skill rank
   });
 }
 
@@ -503,6 +537,7 @@ function connect() {
     else if (msg.type === 'ticker')      onTicker(msg);
     else if (msg.type === 'trade')       onTrade(msg);
     else if (msg.type === 'leaderboard') onLeaderboard(msg);
+    else if (msg.type === 'form')        onForm(msg);
     else if (msg.type === 'poly')        onPoly(msg);
   };
 }
@@ -526,6 +561,17 @@ function onLeaderboard(msg) {
   });
   recomputeSortKeys();
   renderTable();   // once per ~60s — cheap enough for a full re-render
+}
+
+function onForm(msg) {
+  // Server sends a per-ticker map: { ticker: {form_score, avg_l5, made_cut_pct, ranks, …} }
+  Object.entries(msg.markets || {}).forEach(([ticker, f]) => {
+    const m = markets[ticker];
+    if (m) m.form = f;
+  });
+  recomputeSortKeys();
+  if (selectedTicker) updateDetailForm(markets[selectedTicker]);
+  renderTable();   // form refreshes only every ~6h — a full re-render is cheap
 }
 
 function onTicker(msg) {
@@ -689,6 +735,32 @@ function truePrice(m) {
   return (kp * kr + pp * pr) / (kr + pr);
 }
 
+// ── recent-form helpers ─────────────────────────────────────────────────────────
+function formClass(z) {
+  if (z == null) return 'form-none';
+  if (z >= 0.8)  return 'form-hot';
+  if (z >= 0.2)  return 'form-warm';
+  if (z >= -0.4) return 'form-cool';
+  return 'form-cold';
+}
+// composite SG-proxy rank (GIR + putts/GIR tour ranks, lower = better) for sorting
+function sgRankVal(m) {
+  const r = m.form && m.form.ranks;
+  if (!r) return 9999;
+  const xs = [r.gir, r.putts_gir].filter(v => v != null);
+  return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 9999;
+}
+function fmtForm(z)   { return z == null ? '—' : (z > 0 ? '+' : '') + z.toFixed(2); }
+function fmtFinish(v) { return v == null ? '—' : (Number.isInteger(v) ? v : v.toFixed(1)); }
+function fmtPct(v)    { return v == null ? '—' : `${Math.round(v)}%`; }
+function sgCellHTML(m) {
+  const r = m.form && m.form.ranks;
+  if (!r || (r.gir == null && r.putts_gir == null)) return '<span class="form-none">—</span>';
+  const g = r.gir != null ? `<b>${r.gir}</b>` : '—';
+  const p = r.putts_gir != null ? `<b>${r.putts_gir}</b>` : '—';
+  return `GIR ${g} · PT ${p}`;
+}
+
 // ── table rendering ───────────────────────────────────────────────────────────
 function visibleMarkets() {
   const q = document.getElementById('searchInput').value.toLowerCase();
@@ -709,7 +781,7 @@ function renderTable() {
   const tbody = document.getElementById('marketTbody');
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="11" class="empty">No markets match the filter.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="15" class="empty">No markets match the filter.</td></tr>`;
     document.getElementById('filterCount').textContent = '';
     return;
   }
@@ -740,6 +812,10 @@ function rowHTML(m) {
       <td class="k-price ${kConfClass(m)}${bv === 'k' ? ' best-ask' : ''}" id="kprice-${m.ticker}">${fmtPrice(kPrice(m))}</td>
       <td class="poly-price ${pConfClass(m)}${bv === 'p' ? ' best-ask' : ''}" id="pprice-${m.ticker}">${fmtPrice(polyPrice(m))}</td>
       <td class="true-price" id="trueprice-${m.ticker}">${fmtPrice(truePrice(m))}</td>
+      <td class="form-cell ${formClass(m.form && m.form.form_score)}" id="form-${m.ticker}">${fmtForm(m.form && m.form.form_score)}</td>
+      <td class="form-num"   id="l5-${m.ticker}">${fmtFinish(m.form && m.form.avg_l5)}</td>
+      <td class="form-muted" id="cut-${m.ticker}">${fmtPct(m.form && m.form.made_cut_pct)}</td>
+      <td class="sg-cell"    id="sg-${m.ticker}">${sgCellHTML(m)}</td>
       <td class="vol-cell"   id="vol-${m.ticker}">${fmtVol(m.volume)}</td>
       <td class="vol-cell"   id="pvol-${m.ticker}">${fmtUsd(m.poly_volume)}</td>
       <td class="speed-cell">
@@ -826,6 +902,7 @@ async function openDetail(ticker) {
   document.getElementById('detailPlayer').textContent = m.player;
   document.getElementById('detailTicker').textContent = ticker;
   updateDetailPrices(m);
+  updateDetailForm(m);
 
   // clear trade feed
   document.getElementById('tradeFeed').innerHTML = '';
@@ -862,6 +939,28 @@ function pushDetailPoint(venue, ts, price) {
   arr.push({ ts, v: price });
   if (arr.length > 5000) arr.shift();
   applyDetailData();
+}
+
+function updateDetailForm(m) {
+  const el = document.getElementById('detailForm');
+  if (!el) return;
+  const f = m && m.form;
+  if (!f) { el.innerHTML = '<div class="df-title">Recent Form</div><div class="df-empty">No form data.</div>'; return; }
+  const r = f.ranks || {};
+  const rk = v => v != null ? `#${v}` : '—';
+  el.innerHTML = `
+    <div class="df-title">Recent Form
+      <span style="float:right" class="${formClass(f.form_score)}">${fmtForm(f.form_score)} z</span>
+    </div>
+    <div class="df-grid">
+      <div class="df-row"><span>Last finish</span><b>${fmtFinish(f.last1)}</b></div>
+      <div class="df-row"><span>Avg L3</span><b>${fmtFinish(f.avg_l3)}</b></div>
+      <div class="df-row"><span>Avg L5</span><b>${fmtFinish(f.avg_l5)}</b></div>
+      <div class="df-row"><span>Made cut</span><b>${fmtPct(f.made_cut_pct)}</b></div>
+      <div class="df-row"><span>Scoring avg</span><b>${f.scoring_avg ?? '—'}</b></div>
+      <div class="df-row"><span>Top 10s / Wins</span><b>${f.top10 ?? '—'} / ${f.wins ?? '—'}</b></div>
+    </div>
+    <div class="df-recent">Tour ranks — Drive <b>${rk(r.drive_dist)}</b> · Acc <b>${rk(r.drive_acc)}</b> · GIR <b>${rk(r.gir)}</b> · Putt <b>${rk(r.putts_gir)}</b> · Birdies <b>${rk(r.birdies_rnd)}</b> · Money <b>${rk(r.earnings_rank)}</b></div>`;
 }
 
 function updateDetailPrices(m) {
