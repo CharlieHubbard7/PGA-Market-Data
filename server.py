@@ -135,6 +135,12 @@ async def dashboard():
     return Path("dashboard/index.html").read_text()
 
 
+@app.get("/v2", response_class=HTMLResponse)
+async def dashboard_v2():
+    """Token-optimization variant: Advanced Stats collapsed by default."""
+    return Path("dashboard/index_v2.html").read_text()
+
+
 @app.get("/api/markets")
 async def get_markets():
     result = []

@@ -1,0 +1,1312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kalshi PGA Live</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --border:   #30363d;
+    --text:     #e6edf3;
+    --muted:    #8b949e;
+    --green:    #3fb950;
+    --red:      #f85149;
+    --yellow:   #d29922;
+    --blue:     #58a6ff;
+    --purple:   #bc8cff;
+    --flash-bg: rgba(210, 153, 34, 0.25);
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
+  header h1 { font-size: 15px; font-weight: 600; letter-spacing: .02em; }
+  header h1 span { color: var(--blue); }
+
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .status-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background .3s;
+  }
+  .status-dot.live  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.error { background: var(--red); }
+
+  /* ── stats bar ── */
+  .stats-bar {
+    display: flex;
+    gap: 24px;
+    padding: 8px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .stats-bar strong { color: var(--text); }
+
+  /* ── filters ── */
+  .filters {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+
+  .filters input[type="text"] {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    width: 200px;
+    outline: none;
+  }
+  .filters input[type="text"]:focus { border-color: var(--blue); }
+
+  .range-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .range-group label { white-space: nowrap; }
+  .range-group input[type="range"] {
+    width: 90px;
+    accent-color: var(--blue);
+    cursor: pointer;
+  }
+  .range-val { color: var(--text); font-weight: 500; min-width: 28px; }
+
+  .filter-count {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* ── main layout ── */
+  .main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── table pane ── */
+  .table-pane {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: auto;
+  }
+
+  table {
+    width: max-content;       /* grow as wide as the columns need — Excel-style */
+    min-width: 100%;
+    border-collapse: collapse;
+  }
+
+  /* frozen Player column — stays put while you scroll the stats horizontally */
+  th.col-sticky, td.col-sticky {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: var(--surface);
+    box-shadow: 1px 0 0 var(--border);
+  }
+  tbody td.col-sticky { background: var(--bg); }
+  tbody tr:hover td.col-sticky    { background: #11161d; }
+  tbody tr.selected td.col-sticky { background: #121a26; }
+  thead th.col-sticky { z-index: 3; }
+
+  thead th {
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 14px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  thead th:hover { color: var(--text); }
+  thead th.sorted { color: var(--blue); }
+  thead th.sorted::after { content: attr(data-arrow); margin-left: 4px; }
+
+  tbody tr {
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background .1s;
+  }
+  tbody tr:hover    { background: rgba(88,166,255,.05); }
+  tbody tr.selected { background: rgba(88,166,255,.10); }
+
+  td {
+    padding: 10px 18px;
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+  thead th { padding: 9px 18px; }
+
+  .player-name  { font-weight: 500; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+  .price-cell   { font-variant-numeric: tabular-nums; }
+  .vol-cell     { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* combined Kalshi/Polymarket cells — two stacked rows, K on top, P below */
+  .kp-cell      { font-variant-numeric: tabular-nums; line-height: 1.35; }
+  .kp-row       { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .kp-tag       { font-size: 9px; font-weight: 700; letter-spacing: .03em; width: 10px; display: inline-block; }
+  .kp-tag.k     { color: var(--blue); }
+  .kp-tag.p     { color: var(--purple); }
+  .kp-row.p     { color: var(--muted); }
+
+  /* speed / freshness column */
+  .speed-cell   { font-variant-numeric: tabular-nums; line-height: 1.35; }
+  .rate         { font-size: 11px; }
+  .rate .unit   { color: var(--muted); font-size: 9px; }
+  .fdot         { font-size: 9px; line-height: 1; transition: color .2s; }
+  .fdot.fresh-green  { color: var(--green); }
+  .fdot.fresh-yellow { color: var(--yellow); }
+  .fdot.fresh-red    { color: var(--red); }
+  .fdot.fresh-none   { color: var(--border); }
+
+  /* arbitrage column */
+  .arb-cell     { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 11px; white-space: nowrap; }
+  .arb-none     { color: var(--muted); font-weight: 400; }
+  .arb-live     { color: var(--green); }
+  .arb-live-row { background: rgba(63,185,80,.10); }
+  .arb-stale    { color: var(--yellow); }     /* positive edge but a quote is stale — don't trust */
+
+  /* Kalshi single-price column — blue-tinted */
+  .k-price      { background: rgba(88,166,255,.10); color: var(--blue); font-weight: 700; font-variant-numeric: tabular-nums; }
+  th.k-price    { background: rgba(88,166,255,.10); color: var(--blue); }
+
+  /* Polymarket single-price column — purple-tinted */
+  .poly-price   { background: rgba(188,140,255,.10); color: var(--purple); font-weight: 700; font-variant-numeric: tabular-nums; }
+  th.poly-price { background: rgba(188,140,255,.10); color: var(--purple); }
+
+  /* Blended True price — neutral consensus */
+  .true-price   { background: rgba(255,255,255,.04); color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+  th.true-price { background: rgba(255,255,255,.04); color: var(--text); font-weight: 700; }
+
+  /* Confidence band: wide spread = price is less trustworthy */
+  .conf-medium  { opacity: .65; }
+  .conf-wide    { color: var(--muted) !important; opacity: .5; font-style: italic; }
+  .conf-none    { color: var(--muted) !important; opacity: .35; }
+
+  /* Best-ask indicator: subtle left border on whichever venue has the lower ask */
+  .best-ask     { box-shadow: inset 3px 0 0 var(--green); }
+
+  .pos-cell     { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 500; }
+  .score-cell   { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .score-under  { color: var(--red); }    /* under par = lower is better, shown red like golf boards */
+  .score-over   { color: var(--muted); }
+  .score-even   { color: var(--text); }
+
+  /* recent-form columns */
+  th.form-col   { background: rgba(63,185,80,.07); }
+  .form-cell    { font-variant-numeric: tabular-nums; font-weight: 700; background: rgba(63,185,80,.06); }
+  .form-hot     { color: var(--green); }
+  .form-warm    { color: #8fd99a; }
+  .form-cool    { color: var(--muted); }
+  .form-cold    { color: var(--red); }
+  .form-num     { font-variant-numeric: tabular-nums; color: var(--text); }
+  .form-muted   { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .sg-cell      { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .sg-cell b    { color: var(--text); font-weight: 600; }
+  .form-none    { color: var(--border); }
+
+  /* Advanced Stats toggle — collapses everything right of P Price */
+  .adv-toggle {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 11px;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all .15s;
+  }
+  .adv-toggle:hover     { color: var(--text); border-color: var(--muted); }
+  .adv-toggle.open      { color: var(--blue); border-color: var(--blue); background: rgba(88,166,255,.10); }
+  /* when collapsed, hide the advanced header cells (body cells aren't rendered at all) */
+  body:not(.adv-open) .adv-col { display: none; }
+
+  /* OWGR — world ranking, the headline signal */
+  th.owgr-col   { background: rgba(88,166,255,.12); color: var(--blue); }
+  .owgr-cell    { background: rgba(88,166,255,.08); color: var(--blue); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  /* season skill-stat columns (driving / GIR / putting / …) */
+  th.skill-col  { background: rgba(210,153,34,.06); }
+  .skill-cell   { font-variant-numeric: tabular-nums; color: var(--text); }
+  .skill-cell .rk { font-size: 9px; color: var(--muted); margin-left: 3px; }
+  .rd-cell      { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .thru-cell    { font-variant-numeric: tabular-nums; color: var(--text); }
+
+  /* detail panel: recent-form breakdown */
+  .detail-form  { padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .detail-form .df-title { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+  .detail-form .df-grid  { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
+  .detail-form .df-row   { display: flex; justify-content: space-between; }
+  .detail-form .df-row span:first-child { color: var(--muted); }
+  .detail-form .df-row b  { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .detail-form .df-recent { margin-top: 8px; color: var(--muted); font-size: 11px; }
+  .detail-form .df-recent b { color: var(--text); font-weight: 600; }
+  .detail-form .df-empty { color: var(--muted); }
+
+  @keyframes flash-green { from { background: rgba(63,185,80,.3); } to { background: transparent; } }
+  @keyframes flash-red   { from { background: rgba(248,81,73,.3); } to { background: transparent; } }
+  .flash-up   { animation: flash-green .7s ease-out; }
+  .flash-down { animation: flash-red   .7s ease-out; }
+
+  /* ── sparkline ── */
+  .spark svg { display: block; }
+
+  /* ── detail panel — overlay drawer so the table keeps full width ── */
+  .detail-panel {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: 440px;
+    z-index: 100;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    box-shadow: -8px 0 24px rgba(0,0,0,.45);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: transform .18s ease-out;
+  }
+  .detail-panel.hidden { transform: translateX(100%); pointer-events: none; }
+
+  .detail-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .detail-header .detail-player { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .detail-header .detail-meta   { font-size: 11px; color: var(--muted); }
+  .detail-close {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 26px; height: 26px;
+    border-radius: 6px;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all .15s;
+  }
+  .detail-close:hover { color: var(--text); border-color: var(--muted); background: rgba(255,255,255,.05); }
+
+  /* chart range buttons */
+  .chart-ranges {
+    display: flex;
+    gap: 6px;
+    padding: 8px 16px 0;
+  }
+  .chart-ranges button {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 5px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    transition: all .15s;
+  }
+  .chart-ranges button:hover  { color: var(--text); }
+  .chart-ranges button.active { color: var(--text); border-color: var(--blue); background: rgba(88,166,255,.12); }
+  .detail-prices {
+    display: flex;
+    gap: 20px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .detail-price-block label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; display: block; margin-bottom: 2px; }
+  .detail-price-block span  { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .detail-price-block.prob span { color: var(--blue); }
+
+  .detail-chart-wrap {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    height: 180px;
+    position: relative;
+  }
+
+  .detail-trades-header {
+    padding: 8px 16px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    border-bottom: 1px solid var(--border);
+  }
+  .trade-feed {
+    overflow-y: auto;
+    flex: 1;
+  }
+  .trade-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 16px;
+    border-bottom: 1px solid rgba(48,54,61,.5);
+    font-size: 12px;
+    animation: trade-in .3s ease-out;
+  }
+  @keyframes trade-in { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
+  .trade-side {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .trade-side.yes { background: rgba(63,185,80,.2);  color: var(--green); }
+  .trade-side.no  { background: rgba(248,81,73,.2);  color: var(--red); }
+  .trade-price    { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .trade-count    { color: var(--muted); }
+  .trade-time     { margin-left: auto; color: var(--muted); font-size: 11px; }
+
+  /* ── empty state ── */
+  .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .empty p { margin-top: 8px; font-size: 12px; }
+
+  /* scrollbar */
+  ::-webkit-scrollbar       { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Kalshi <span>PGA</span> Live — Memorial Tournament</h1>
+  <div class="status-pill">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Connecting...</span>
+  </div>
+</header>
+
+<div class="stats-bar">
+  <div>Markets: <strong id="statTotal">—</strong></div>
+  <div>Visible: <strong id="statVisible">—</strong></div>
+  <div>Trades today: <strong id="statTrades">—</strong></div>
+  <div>Last update: <strong id="statTime">—</strong></div>
+</div>
+
+<div class="filters">
+  <input type="text" id="searchInput" placeholder="Search player…">
+  <button id="advToggle" class="adv-toggle" title="Show/hide the columns to the right of P Price">▸ Advanced Stats</button>
+  <div class="filter-count" id="filterCount"></div>
+</div>
+
+<div class="main">
+  <div class="table-pane">
+    <table>
+      <thead>
+        <tr>
+          <th data-col="player"      data-arrow="↑" class="col-sticky">Player</th>
+          <th data-col="posVal"      data-arrow="↑" title="Live leaderboard position">Pos</th>
+          <th data-col="roundVal"    data-arrow="↑" title="Current round">Rd</th>
+          <th data-col="thruVal"     data-arrow="↑" title="Holes played this round">Thru</th>
+          <th data-col="scoreVal"    data-arrow="↑" title="Score to par">Score</th>
+          <th data-col="truePriceVal" data-arrow="↑" class="true-price" title="Blended consensus — K and P weighted by update rate">True</th>
+          <th data-col="formScoreVal" data-arrow="↑" class="form-col" title="Recent-form score: z vs the field (avg-L5 finish + scoring avg). Higher = hotter.">Form</th>
+          <th>Speed</th>
+          <th>5m Trend</th>
+          <th data-col="owgrVal"     data-arrow="↑" class="owgr-col" title="Official World Golf Ranking (owgr.com; lower = better)">OWGR</th>
+          <th data-col="kPriceVal"   data-arrow="↑" class="k-price"    title="Kalshi price — (bid+ask)/2">K Price</th>
+          <th data-col="polyPriceVal" data-arrow="↑" class="poly-price" title="Polymarket price — mid when spread ≤10¢, else last trade">P Price</th>
+          <th data-col="last1Val"    data-arrow="↑" class="adv-col" title="Most recent tournament finish">L1</th>
+          <th data-col="avgL3Val"    data-arrow="↑" class="adv-col" title="Avg finish, last 3 starts (lower = better)">L3</th>
+          <th data-col="avgL5Val"    data-arrow="↑" class="adv-col" title="Avg finish, last 5 starts (lower = better)">L5</th>
+          <th data-col="cutPctVal"   data-arrow="↑" class="adv-col" title="Season made-cut %">Cut%</th>
+          <th data-col="scAvgVal"    data-arrow="↑" class="adv-col skill-col" title="Season scoring average (lower = better)">ScAvg</th>
+          <th data-col="girVal"      data-arrow="↑" class="adv-col skill-col" title="Greens in regulation % (recent avg; higher = better)">GIR%</th>
+          <th data-col="puttVal"     data-arrow="↑" class="adv-col skill-col" title="Putts per GIR — putting (season; lower = better)">Putt</th>
+          <th data-col="driveVal"    data-arrow="↑" class="adv-col skill-col" title="Driving distance, yds (season)">Drive</th>
+          <th data-col="accVal"      data-arrow="↑" class="adv-col skill-col" title="Driving accuracy % (season; higher = better)">Acc</th>
+          <th data-col="birdieVal"   data-arrow="↑" class="adv-col skill-col" title="Birdies per round (season; higher = better)">Bird</th>
+          <th data-col="sandVal"     data-arrow="↑" class="adv-col skill-col" title="Sand save % (season; higher = better)">Sand</th>
+          <th data-col="volume"      data-arrow="↑" class="adv-col col-k">K Vol</th>
+          <th data-col="poly_volume" data-arrow="↑" class="adv-col col-p">P Vol</th>
+          <th data-col="arbNet"      data-arrow="↑" class="adv-col">Arb</th>
+        </tr>
+      </thead>
+      <tbody id="marketTbody">
+        <tr><td colspan="26" class="empty">Waiting for data…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="detail-panel hidden" id="detailPanel">
+    <div class="detail-header">
+      <div>
+        <div class="detail-player" id="detailPlayer">—</div>
+        <div class="detail-meta"   id="detailTicker">—</div>
+      </div>
+      <button class="detail-close" id="detailClose" title="Close (Esc)">✕</button>
+    </div>
+    <div class="detail-prices">
+      <div class="detail-price-block">
+        <label>K Price</label>
+        <span id="detailKPrice" style="color:var(--blue)">—</span>
+      </div>
+      <div class="detail-price-block">
+        <label>P Price</label>
+        <span id="detailPPrice" style="color:var(--purple)">—</span>
+      </div>
+      <div class="detail-price-block">
+        <label>K Bid / Ask</label>
+        <span id="detailKBA" style="font-size:13px">—</span>
+      </div>
+      <div class="detail-price-block">
+        <label>P Bid / Ask</label>
+        <span id="detailPBA" style="font-size:13px">—</span>
+      </div>
+    </div>
+    <div class="detail-form" id="detailForm"></div>
+    <div class="chart-ranges">
+      <button data-range="300"      class="active">5m</button>
+      <button data-range="1800">30m</button>
+      <button data-range="Infinity">All</button>
+    </div>
+    <div class="detail-chart-wrap">
+      <canvas id="detailChart"></canvas>
+    </div>
+    <div class="detail-trades-header">Recent Trades</div>
+    <div class="trade-feed" id="tradeFeed"></div>
+  </div>
+</div>
+
+<script>
+// ── state ────────────────────────────────────────────────────────────────────
+const markets     = {};      // ticker -> market object (server supplies pos/score/thru)
+const tickHistory = {};      // ticker -> [{ts, bid, ask}]
+const TICK_MAX    = 300;
+
+// Per-venue update timestamps (ms) per ticker, for live speed/freshness.
+const updTimes = { k: {}, p: {} };
+const FRESH_GREEN_S = 5, FRESH_YELLOW_S = 30, STALE_S = 30;  // thresholds (s)
+
+const parsePos   = p => { if (!p || p === '—') return 999; return +p.replace('T', '') || 999; };
+const parseScore = s => { if (!s || s === '—') return 999; if (s.toUpperCase() === 'E') return 0; return +s; };
+
+// Derive numeric sort keys (posVal/scoreVal) from the pos/score strings.
+function recomputeSortKeys() {
+  Object.values(markets).forEach(m => {
+    m.posVal       = parsePos(m.pos);
+    m.scoreVal     = parseScore(m.score);
+    m.roundVal     = m.round && m.round !== '—' ? +String(m.round).replace('R', '') : 0;
+    m.thruVal      = m.thru === 'F' ? 18 : (+m.thru || 0);
+    m.owgrVal      = (m.form && m.form.owgr) ?? 9999;   // lower = better world rank
+    const a = bestArb(m);
+    m.arbNet       = a ? a.net : -1;
+    m.kPriceVal    = kPrice(m)    ?? -1;
+    m.polyPriceVal = polyPrice(m) ?? -1;
+    m.truePriceVal = truePrice(m) ?? -1;
+    const f = m.form || {};
+    m.formScoreVal = f.form_score ?? -99;     // missing form sorts to the bottom
+    m.last1Val     = f.last1  ?? 9999;        // finishes: lower = better
+    m.avgL3Val     = f.avg_l3 ?? 9999;
+    m.avgL5Val     = f.avg_l5 ?? 9999;
+    m.cutPctVal    = f.made_cut_pct ?? -1;
+    m.scAvgVal     = f.scoring_avg ?? 9999;   // lower = better
+    m.girVal       = f.gir_pct ?? -1;         // higher = better
+    m.puttVal      = skv(m, 'putts_gir') ?? 9999;   // lower = better
+    m.driveVal     = skv(m, 'drive_dist') ?? -1;
+    m.accVal       = skv(m, 'drive_acc') ?? -1;
+    m.birdieVal    = skv(m, 'birdies_rnd') ?? -1;
+    m.sandVal      = skv(m, 'sand_save') ?? -1;
+  });
+}
+
+let advOpen = false;   // Advanced Stats (everything right of P Price) collapsed by default
+let sortCol = 'kPriceVal';
+let sortDir = -1;            // -1 = desc (highest price first ≈ favorites on top)
+let selectedTicker = null;
+let detailChart = null;
+let detailData = { k: [], p: [] };   // {ts, v} price series for the open market
+let detailRangeS = 300;              // chart window in seconds (5m default; Infinity = all)
+let totalTrades = 0;
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+let ws;
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+
+  ws.onopen = () => {
+    document.getElementById('statusDot').className  = 'status-dot live';
+    document.getElementById('statusText').textContent = 'Live';
+  };
+
+  ws.onclose = () => {
+    document.getElementById('statusDot').className  = 'status-dot error';
+    document.getElementById('statusText').textContent = 'Reconnecting…';
+    setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if      (msg.type === 'init')        onInit(msg);
+    else if (msg.type === 'ticker')      onTicker(msg);
+    else if (msg.type === 'trade')       onTrade(msg);
+    else if (msg.type === 'leaderboard') onLeaderboard(msg);
+    else if (msg.type === 'form')        onForm(msg);
+    else if (msg.type === 'poly')        onPoly(msg);
+  };
+}
+
+// ── message handlers ──────────────────────────────────────────────────────────
+function onInit(msg) {
+  msg.markets.forEach(m => {
+    markets[m.ticker]     = m;
+    tickHistory[m.ticker] = [];
+  });
+  recomputeSortKeys();
+  renderTable();
+}
+
+function onLeaderboard(msg) {
+  // Server sends a per-ticker map: { ticker: {pos, score, thru, round} }
+  Object.entries(msg.markets || {}).forEach(([ticker, lb]) => {
+    const m = markets[ticker];
+    if (!m) return;
+    m.pos = lb.pos; m.score = lb.score; m.thru = lb.thru; m.round = lb.round;
+  });
+  recomputeSortKeys();
+  renderTable();   // once per ~60s — cheap enough for a full re-render
+}
+
+function onForm(msg) {
+  // Server sends a per-ticker map: { ticker: {form_score, avg_l5, made_cut_pct, ranks, …} }
+  Object.entries(msg.markets || {}).forEach(([ticker, f]) => {
+    const m = markets[ticker];
+    if (m) m.form = f;
+  });
+  recomputeSortKeys();
+  if (selectedTicker) updateDetailForm(markets[selectedTicker]);
+  renderTable();   // form refreshes only every ~6h — a full re-render is cheap
+}
+
+function onTicker(msg) {
+  const m = markets[msg.ticker];
+  if (!m) return;
+
+  const prevBid = m.yes_bid;
+  // Coerce to Number defensively — Kalshi prices can arrive as strings, and
+  // string '0.03'+'0.04' silently concatenates instead of adding (→ NaN prices).
+  m.yes_bid      = Number(msg.yes_bid);
+  m.yes_ask      = Number(msg.yes_ask);
+
+  // push to in-browser history
+  const hist = tickHistory[msg.ticker];
+  hist.push({ ts: msg.ts, bid: m.yes_bid, ask: m.yes_ask });
+  if (hist.length > TICK_MAX) hist.shift();
+
+  // update table cells (no full re-render)
+  recordUpdate('k', msg.ticker);
+  updateRow(msg.ticker, prevBid);
+  updateArb(msg.ticker);
+
+  // update detail panel if open
+  if (selectedTicker === msg.ticker) {
+    updateDetailPrices(m);
+    pushDetailPoint('k', msg.ts, kPrice(m));
+  }
+
+  document.getElementById('statTime').textContent = new Date().toLocaleTimeString();
+}
+
+function onTrade(msg) {
+  const m = markets[msg.ticker];
+  if (!m) return;
+
+  m.volume = (m.volume || 0) + (msg.count || 1);
+  // Keep the last-trade price fresh so K Price tracks Kalshi's displayed price.
+  if (msg.price != null && msg.price > 0) {
+    m.yes_last = msg.price;
+    const kpEl = document.getElementById(`kprice-${msg.ticker}`);
+    if (kpEl) kpEl.textContent = fmtPrice(kPrice(m));
+  }
+  totalTrades++;
+
+  const volEl = document.getElementById(`vol-${CSS.escape(msg.ticker)}`);
+  if (volEl) volEl.textContent = fmtVol(m.volume);
+
+  document.getElementById('statTrades').textContent = totalTrades.toLocaleString();
+
+  if (selectedTicker === msg.ticker) {
+    updateDetailPrices(m);
+    prependTrade(msg);
+  }
+}
+
+function onPoly(msg) {
+  const m = markets[msg.ticker];
+  if (!m) return;
+  m.poly_bid    = msg.poly_bid;
+  m.poly_ask    = msg.poly_ask;
+  m.poly_volume = msg.poly_volume;
+  if (msg.poly_last != null) m.poly_last = msg.poly_last;
+  if (msg.poly_mid  != null) m.poly_mid  = msg.poly_mid;
+  m.poly_price  = msg.poly_price;
+  m.polyPriceVal = polyPrice(m) ?? -1;
+
+  const bv  = bestBuyVenue(m);
+  const pcc = pConfClass(m);
+  const kcc = kConfClass(m);
+
+  const ppEl = document.getElementById(`pprice-${msg.ticker}`);
+  if (ppEl) {
+    ppEl.textContent = fmtPrice(polyPrice(m));
+    ppEl.className = `poly-price${pcc ? ' '+pcc : ''}${bv === 'p' ? ' best-ask' : ''}`;
+  }
+  const kpEl = document.getElementById(`kprice-${msg.ticker}`);
+  if (kpEl) kpEl.className = `k-price${kcc ? ' '+kcc : ''}${bv === 'k' ? ' best-ask' : ''}`;
+
+  const pvEl = document.getElementById(`pvol-${msg.ticker}`);
+  if (pvEl) pvEl.textContent = fmtUsd(m.poly_volume);
+
+  const tpEl = document.getElementById(`trueprice-${msg.ticker}`);
+  if (tpEl) tpEl.textContent = fmtPrice(truePrice(m));
+
+  // live detail panel + chart (P side)
+  if (selectedTicker === msg.ticker) {
+    updateDetailPrices(m);
+    pushDetailPoint('p', Date.now() / 1000, polyPrice(m));
+  }
+
+  recordUpdate('p', msg.ticker);
+  updateArb(msg.ticker);
+}
+
+// The single Polymarket number: prefer the server's size-weighted microprice,
+// then live midpoint, then last trade / Gamma price.
+function polyPrice(m) {
+  if (m.poly_price != null) return m.poly_price;
+  if (m.poly_bid != null && m.poly_ask != null) return (m.poly_bid + m.poly_ask) / 2;
+  if (m.poly_last != null) return m.poly_last;
+  if (m.poly_mid  != null) return m.poly_mid;
+  return null;
+}
+
+
+// ── price helpers ─────────────────────────────────────────────────────────────
+// K Price mirrors how Kalshi's own site shows a price (and the Polymarket rule):
+//   • both sides quoted → midpoint (Kalshi books are tight, so mid ≈ the app)
+//   • one-sided book     → last traded price (what Kalshi displays for longshots
+//                          with an ask but no bid)
+//   • else               → whichever single side exists
+function kPrice(m) {
+  const b = m.yes_bid, a = m.yes_ask;
+  const hasB = b != null && b > 0, hasA = a != null && a > 0;
+  if (hasB && hasA) return (b + a) / 2;
+  if (m.yes_last != null && m.yes_last > 0) return m.yes_last;
+  if (hasA) return a;
+  if (hasB) return b;
+  return null;
+}
+
+// Confidence: a one-sided book is low-confidence regardless of nominal spread.
+function kConfClass(m) {
+  const b = m.yes_bid, a = m.yes_ask;
+  const hasB = b != null && b > 0, hasA = a != null && a > 0;
+  if (!hasB && !hasA) return 'conf-none';
+  if (!hasB || !hasA) return 'conf-wide';   // missing a side → trust the number less
+  const s = a - b;
+  if (s <= 0.05) return '';
+  if (s <= 0.15) return 'conf-medium';
+  return 'conf-wide';
+}
+function pConfClass(m) {
+  const s = (m.poly_ask != null && m.poly_bid != null) ? m.poly_ask - m.poly_bid : null;
+  if (s == null) return 'conf-none';
+  if (s <= 0.10) return '';            // ≤10¢ — uses mid, trustworthy (matches pricing rule)
+  if (s <= 0.20) return 'conf-medium'; // 10-20¢ — using last trade
+  return 'conf-wide';                  // >20¢
+}
+
+// Which venue has the lower ask (better for someone buying YES)?
+function bestBuyVenue(m) {
+  const ka = m.yes_ask, pa = m.poly_ask;
+  if (ka == null && pa == null) return null;
+  if (ka == null) return 'p';
+  if (pa == null) return 'k';
+  if (ka < pa - 0.001) return 'k';
+  if (pa < ka - 0.001) return 'p';
+  return null;
+}
+
+// Blended "True" price — K and P weighted by recent update rate
+function truePrice(m) {
+  const kp = kPrice(m);
+  const pp = polyPrice(m);
+  if (kp == null && pp == null) return null;
+  if (kp == null) return pp;
+  if (pp == null) return kp;
+  const kr = rateMin('k', m.ticker) || 1;
+  const pr = rateMin('p', m.ticker) || 1;
+  return (kp * kr + pp * pr) / (kr + pr);
+}
+
+// ── recent-form helpers ─────────────────────────────────────────────────────────
+function formClass(z) {
+  if (z == null) return 'form-none';
+  if (z >= 0.8)  return 'form-hot';
+  if (z >= 0.2)  return 'form-warm';
+  if (z >= -0.4) return 'form-cool';
+  return 'form-cold';
+}
+function fmtForm(z)   { return z == null ? '—' : (z > 0 ? '+' : '') + z.toFixed(2); }
+function fmtFinish(v) { return v == null ? '—' : (Number.isInteger(v) ? v : v.toFixed(1)); }
+function fmtPct(v)    { return v == null ? '—' : `${Math.round(v)}%`; }
+function fmtOwgr(r)   { return r == null ? '—' : `#${r}`; }
+
+// season skill stat accessors: value + PGA-Tour rank
+function skv(m, key) { return (m.form && m.form.skills && m.form.skills[key] || {}).value ?? null; }
+function skr(m, key) { return (m.form && m.form.skills && m.form.skills[key] || {}).rank  ?? null; }
+
+// a skill cell: formatted value + small tour rank. `dec` decimals, `suffix` like '%'.
+function skillCell(m, key, dec, suffix) {
+  const v = skv(m, key), r = skr(m, key);
+  if (v == null) return '<span class="form-none">—</span>';
+  const val = dec != null ? v.toFixed(dec) : v;
+  return `${val}${suffix || ''}${r != null ? `<span class="rk">#${r}</span>` : ''}`;
+}
+
+// ── table rendering ───────────────────────────────────────────────────────────
+function visibleMarkets() {
+  const q = document.getElementById('searchInput').value.toLowerCase();
+
+  return Object.values(markets).filter(m => {
+    if (q && !m.player.toLowerCase().includes(q)) return false;
+    return true;
+  }).sort((a, b) => {
+    const va = a[sortCol] ?? 0;
+    const vb = b[sortCol] ?? 0;
+    if (typeof va === 'string') return sortDir * va.localeCompare(vb);
+    return sortDir * (va - vb);   // sortDir=-1 (↓) = descending, matches the string branch + the arrow
+  });
+}
+
+function renderTable() {
+  const rows = visibleMarkets();
+  const tbody = document.getElementById('marketTbody');
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="26" class="empty">No markets match the filter.</td></tr>`;
+    document.getElementById('filterCount').textContent = '';
+    return;
+  }
+
+  tbody.innerHTML = rows.map(m => rowHTML(m)).join('');
+
+  // attach click handlers
+  tbody.querySelectorAll('tr[data-ticker]').forEach(tr => {
+    tr.addEventListener('click', () => openDetail(tr.dataset.ticker));
+    if (tr.dataset.ticker === selectedTicker) tr.classList.add('selected');
+  });
+
+  document.getElementById('statTotal').textContent   = Object.keys(markets).length;
+  document.getElementById('filterCount').textContent = `${rows.length} of ${Object.keys(markets).length} shown`;
+  document.getElementById('statVisible').textContent = rows.length;
+}
+
+function rowHTML(m) {
+  const sv = m.scoreVal;
+  const scoreClass = (sv == null || sv === 999) ? 'score-even' : sv < 0 ? 'score-under' : sv > 0 ? 'score-over' : 'score-even';
+  const bv = bestBuyVenue(m);
+  const f = m.form || {};
+  // Everything from L1 rightward is only BUILT when Advanced Stats is open — not
+  // rendered (and not in the DOM) while collapsed, to keep the table light.
+  const adv = advOpen ? `
+      <td class="form-num">${fmtFinish(f.last1)}</td>
+      <td class="form-num">${fmtFinish(f.avg_l3)}</td>
+      <td class="form-num">${fmtFinish(f.avg_l5)}</td>
+      <td class="form-muted">${fmtPct(f.made_cut_pct)}</td>
+      <td class="skill-cell">${f.scoring_avg ?? '—'}</td>
+      <td class="skill-cell">${f.gir_pct != null ? f.gir_pct + '%' : '—'}</td>
+      <td class="skill-cell">${skillCell(m, 'putts_gir', 3, '')}</td>
+      <td class="skill-cell">${skillCell(m, 'drive_dist', 1, '')}</td>
+      <td class="skill-cell">${skillCell(m, 'drive_acc', 1, '%')}</td>
+      <td class="skill-cell">${skillCell(m, 'birdies_rnd', 2, '')}</td>
+      <td class="skill-cell">${skillCell(m, 'sand_save', 0, '%')}</td>
+      <td class="vol-cell"   id="vol-${m.ticker}">${fmtVol(m.volume)}</td>
+      <td class="vol-cell"   id="pvol-${m.ticker}">${fmtUsd(m.poly_volume)}</td>
+      <td class="arb-cell" id="arb-${m.ticker}">—</td>` : '';
+  return `
+    <tr data-ticker="${m.ticker}">
+      <td class="player-name col-sticky" title="${m.title}">${m.player}</td>
+      <td class="pos-cell">${m.pos || '—'}</td>
+      <td class="rd-cell">${m.round || '—'}</td>
+      <td class="thru-cell">${m.thru || '—'}</td>
+      <td class="score-cell ${scoreClass}">${m.score || '—'}</td>
+      <td class="true-price" id="trueprice-${m.ticker}">${fmtPrice(truePrice(m))}</td>
+      <td class="form-cell ${formClass(f.form_score)}" id="form-${m.ticker}">${fmtForm(f.form_score)}</td>
+      <td class="speed-cell">
+        <div class="kp-row"><span class="kp-tag k">K</span><span class="fdot fresh-none" id="kdot-${m.ticker}">●</span><span class="rate" id="krate-${m.ticker}">—</span></div>
+        <div class="kp-row"><span class="kp-tag p">P</span><span class="fdot fresh-none" id="pdot-${m.ticker}">●</span><span class="rate" id="prate-${m.ticker}">—</span></div>
+      </td>
+      <td class="spark"    id="spark-${m.ticker}">${sparkSVG(tickHistory[m.ticker] || [])}</td>
+      <td class="owgr-cell" id="owgr-${m.ticker}">${fmtOwgr(f.owgr)}</td>
+      <td class="k-price ${kConfClass(m)}${bv === 'k' ? ' best-ask' : ''}" id="kprice-${m.ticker}">${fmtPrice(kPrice(m))}</td>
+      <td class="poly-price ${pConfClass(m)}${bv === 'p' ? ' best-ask' : ''}" id="pprice-${m.ticker}">${fmtPrice(polyPrice(m))}</td>
+      ${adv}
+    </tr>`;
+}
+
+function updateRow(ticker, prevBid) {
+  const m = markets[ticker];
+  const kpEl  = document.getElementById(`kprice-${ticker}`);
+  const sparkEl = document.getElementById(`spark-${ticker}`);
+  if (!kpEl) return;
+
+  const bv  = bestBuyVenue(m);
+  const kcc = kConfClass(m);
+  const pcc = pConfClass(m);
+
+  const dir = m.yes_bid > prevBid ? 'up' : m.yes_bid < prevBid ? 'down' : null;
+  kpEl.textContent = fmtPrice(kPrice(m));
+  kpEl.className = `k-price${kcc ? ' '+kcc : ''}${bv === 'k' ? ' best-ask' : ''}`;
+
+  // update best-ask indicator on P Price cell when K price changes (bv can flip)
+  const ppEl = document.getElementById(`pprice-${ticker}`);
+  if (ppEl) ppEl.className = `poly-price${pcc ? ' '+pcc : ''}${bv === 'p' ? ' best-ask' : ''}`;
+
+  // update True price
+  const tpEl = document.getElementById(`trueprice-${ticker}`);
+  if (tpEl) tpEl.textContent = fmtPrice(truePrice(m));
+
+  if (sparkEl) sparkEl.innerHTML = sparkSVG(tickHistory[ticker] || []);
+
+  if (dir) {
+    kpEl.classList.remove('flash-up', 'flash-down');
+    void kpEl.offsetWidth;
+    kpEl.classList.add(`flash-${dir}`);
+    kpEl.addEventListener('animationend', () => kpEl.classList.remove(`flash-${dir}`), { once: true });
+  }
+}
+
+// ── sparkline ─────────────────────────────────────────────────────────────────
+// Per-tick price: midpoint when two-sided, else whichever side exists. This is the
+// same notion as K Price, so the trend line is meaningful even for no-bid longshots
+// (plotting raw bid left them as a flat line at zero).
+function tickPrice(p) {
+  const hasB = p.bid != null && p.bid > 0, hasA = p.ask != null && p.ask > 0;
+  if (hasB && hasA) return (p.bid + p.ask) / 2;
+  if (hasA) return p.ask;
+  if (hasB) return p.bid;
+  return null;
+}
+function sparkSVG(hist) {
+  const vals = (hist || []).map(tickPrice).filter(v => v != null);
+  if (vals.length < 2) return '<svg width="80" height="28"></svg>';
+  const min   = Math.min(...vals);
+  const max   = Math.max(...vals);
+  const range = max - min || 0.0001;
+  const W = 80, H = 28, pad = 3;
+
+  const pts = vals.map((v, i) => {
+    const x = pad + (i / (vals.length - 1)) * (W - pad * 2);
+    const y = H - pad - ((v - min) / range) * (H - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+
+  const color = vals[vals.length - 1] >= vals[0] ? '#3fb950' : '#f85149';
+  return `<svg width="${W}" height="${H}"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
+// ── detail panel ──────────────────────────────────────────────────────────────
+async function openDetail(ticker) {
+  selectedTicker = ticker;
+  const m = markets[ticker];
+
+  // highlight row
+  document.querySelectorAll('tbody tr').forEach(tr => tr.classList.remove('selected'));
+  const row = document.querySelector(`tr[data-ticker="${ticker}"]`);
+  if (row) row.classList.add('selected');
+
+  // populate header
+  document.getElementById('detailPlayer').textContent = m.player;
+  document.getElementById('detailTicker').textContent = ticker;
+  updateDetailPrices(m);
+  updateDetailForm(m);
+
+  // clear trade feed
+  document.getElementById('tradeFeed').innerHTML = '';
+
+  // show panel
+  document.getElementById('detailPanel').classList.remove('hidden');
+
+  // fetch BOTH venue histories in parallel, build the price series for each
+  const enc = encodeURIComponent(ticker);
+  const [kRaw, pRaw] = await Promise.all([
+    fetch(`/api/history/${enc}`).then(r => r.json()).catch(() => []),
+    fetch(`/api/poly-history/${enc}`).then(r => r.json()).catch(() => []),
+  ]);
+  if (selectedTicker !== ticker) return;   // user clicked away while fetching
+
+  const kHist = dedupeTicks([...kRaw, ...(tickHistory[ticker] || [])]);
+  detailData.k = kHist.map(p => ({ ts: p.ts, v: tickPrice(p) })).filter(d => d.v != null);
+  detailData.p = dedupeTicks(pRaw).map(p => ({ ts: p.ts, v: tickPrice(p) })).filter(d => d.v != null);
+
+  buildChart();
+}
+
+// sort by time + drop consecutive duplicate timestamps (kills vertical staircases)
+function dedupeTicks(hist) {
+  const s = [...hist].sort((a, b) => a.ts - b.ts);
+  return s.filter((p, i) => i === 0 || p.ts !== s[i - 1].ts);
+}
+
+// Append a live point to the open market's series and refresh the chart.
+function pushDetailPoint(venue, ts, price) {
+  if (price == null || !detailChart) return;
+  const arr = detailData[venue];
+  if (arr.length && ts <= arr[arr.length - 1].ts) ts = arr[arr.length - 1].ts + 0.001;  // keep monotonic
+  arr.push({ ts, v: price });
+  if (arr.length > 5000) arr.shift();
+  applyDetailData();
+}
+
+function updateDetailForm(m) {
+  const el = document.getElementById('detailForm');
+  if (!el) return;
+  const f = m && m.form;
+  if (!f) { el.innerHTML = '<div class="df-title">Recent Form</div><div class="df-empty">No form data.</div>'; return; }
+  const sk = f.skills || {};
+  const val = (k, dec, suf) => { const v = (sk[k] || {}).value; return v == null ? '—' : (dec != null ? v.toFixed(dec) : v) + (suf || ''); };
+  const rk  = (k) => { const r = (sk[k] || {}).rank; return r != null ? ` <span class="rk">#${r}</span>` : ''; };
+  el.innerHTML = `
+    <div class="df-title">Recent Form
+      <span style="float:right" class="${formClass(f.form_score)}">${fmtForm(f.form_score)} z</span>
+    </div>
+    <div class="df-grid">
+      <div class="df-row"><span>World rank</span><b style="color:var(--blue)">${fmtOwgr(f.owgr)}</b></div>
+      <div class="df-row"><span>Last finish</span><b>${fmtFinish(f.last1)}</b></div>
+      <div class="df-row"><span>Avg L3</span><b>${fmtFinish(f.avg_l3)}</b></div>
+      <div class="df-row"><span>Avg L5</span><b>${fmtFinish(f.avg_l5)}</b></div>
+      <div class="df-row"><span>Made cut</span><b>${fmtPct(f.made_cut_pct)}</b></div>
+      <div class="df-row"><span>Scoring avg</span><b>${f.scoring_avg ?? '—'}</b></div>
+      <div class="df-row"><span>Top 10s / Wins</span><b>${f.top10 ?? '—'} / ${f.wins ?? '—'}</b></div>
+    </div>
+    <div class="df-title" style="margin-top:10px">Season Skills (value · tour rank)</div>
+    <div class="df-grid">
+      <div class="df-row"><span>GIR%</span><b>${f.gir_pct != null ? f.gir_pct + '%' : '—'}</b></div>
+      <div class="df-row"><span>Putts/GIR</span><b>${val('putts_gir', 3)}${rk('putts_gir')}</b></div>
+      <div class="df-row"><span>Driving</span><b>${val('drive_dist', 1)}${rk('drive_dist')}</b></div>
+      <div class="df-row"><span>Drive acc</span><b>${val('drive_acc', 1, '%')}${rk('drive_acc')}</b></div>
+      <div class="df-row"><span>Birdies/rnd</span><b>${val('birdies_rnd', 2)}${rk('birdies_rnd')}</b></div>
+      <div class="df-row"><span>Sand save</span><b>${val('sand_save', 0, '%')}${rk('sand_save')}</b></div>
+    </div>
+    <div class="df-recent">Money rank <b>${(sk.earnings_rank != null ? '#' + sk.earnings_rank : '—')}</b></div>`;
+}
+
+function updateDetailPrices(m) {
+  document.getElementById('detailKPrice').textContent = fmtPrice(kPrice(m));
+  document.getElementById('detailPPrice').textContent = fmtPrice(polyPrice(m));
+  document.getElementById('detailKBA').textContent = `${fmtPrice(m.yes_bid)} / ${fmtPrice(m.yes_ask)}`;
+  document.getElementById('detailPBA').textContent = `${fmtPrice(m.poly_bid)} / ${fmtPrice(m.poly_ask)}`;
+}
+
+function buildChart() {
+  const ctx = document.getElementById('detailChart').getContext('2d');
+  if (detailChart) { detailChart.destroy(); detailChart = null; }
+
+  detailChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      datasets: [
+        {
+          label: 'K Price',
+          data: [],
+          borderColor:     '#58a6ff',
+          backgroundColor: 'rgba(88,166,255,.08)',
+          borderWidth: 1.8,
+          pointRadius: 0,
+          tension: 0.25,
+          fill: false,
+          spanGaps: true,
+        },
+        {
+          label: 'P Price',
+          data: [],
+          borderColor:     '#bc8cff',
+          backgroundColor: 'transparent',
+          borderWidth: 1.8,
+          pointRadius: 0,
+          tension: 0.25,
+          fill: false,
+          spanGaps: true,
+        },
+      ],
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#8b949e', font: { size: 11 }, boxWidth: 20, usePointStyle: true } },
+        tooltip: {
+          backgroundColor: '#161b22',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#8b949e',
+          bodyColor: '#e6edf3',
+          callbacks: {
+            title:  items => new Date(items[0].parsed.x).toLocaleTimeString(),
+            label:  item  => ` ${item.dataset.label}: ${item.parsed.y.toFixed(1)}¢`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: {
+            tooltipFormat: 'HH:mm:ss',
+            displayFormats: { second: 'HH:mm:ss', minute: 'HH:mm' },
+          },
+          ticks: { color: '#8b949e', font: { size: 10 }, maxTicksLimit: 6, autoSkip: true },
+          grid: { color: 'rgba(48,54,61,.6)' },
+        },
+        y: {
+          ticks: { color: '#8b949e', font: { size: 10 }, callback: v => `${v}¢` },
+          grid: { color: 'rgba(48,54,61,.6)' },
+        },
+      },
+    },
+  });
+  applyDetailData();
+}
+
+// Filter both series to the active range window and push into the chart.
+function applyDetailData() {
+  if (!detailChart) return;
+  const cutoff = detailRangeS === Infinity ? 0 : (Date.now() / 1000) - detailRangeS;
+  const toXY = arr => arr.filter(d => d.ts >= cutoff).map(d => ({ x: d.ts * 1000, y: +(d.v * 100).toFixed(2) }));
+  detailChart.data.datasets[0].data = toXY(detailData.k);
+  detailChart.data.datasets[1].data = toXY(detailData.p);
+  detailChart.update('none');
+}
+
+function prependTrade(msg) {
+  const feed = document.getElementById('tradeFeed');
+  const div  = document.createElement('div');
+  div.className = 'trade-item';
+  const count = msg.count ? `${msg.count} contracts` : '';
+  div.innerHTML = `
+    <span class="trade-side ${msg.side}">${msg.side.toUpperCase()}</span>
+    <span class="trade-price">${fmtPrice(msg.price)}</span>
+    <span class="trade-count">${count}</span>
+    <span class="trade-time">${new Date(msg.ts * 1000).toLocaleTimeString()}</span>
+  `;
+  feed.prepend(div);
+  // cap at 50 items
+  while (feed.children.length > 50) feed.removeChild(feed.lastChild);
+}
+
+// ── sorting ───────────────────────────────────────────────────────────────────
+document.querySelectorAll('thead th[data-col]').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (sortCol === col) {
+      sortDir *= -1;
+    } else {
+      sortCol = col;
+      sortDir = col === 'player' ? 1 : -1;
+    }
+    document.querySelectorAll('thead th').forEach(t => t.classList.remove('sorted'));
+    th.classList.add('sorted');
+    th.dataset.arrow = sortDir === -1 ? '↓' : '↑';
+    renderTable();
+  });
+});
+
+// ── filters ───────────────────────────────────────────────────────────────────
+document.getElementById('searchInput').addEventListener('input', renderTable);
+
+// ── Advanced Stats toggle ───────────────────────────────────────────────────────
+document.getElementById('advToggle').addEventListener('click', () => {
+  advOpen = !advOpen;
+  document.body.classList.toggle('adv-open', advOpen);
+  const btn = document.getElementById('advToggle');
+  btn.classList.toggle('open', advOpen);
+  btn.textContent = (advOpen ? '▾ ' : '▸ ') + 'Advanced Stats';
+  // If the table is sorted by a now-hidden advanced column, fall back to a visible one.
+  if (!advOpen && document.querySelector(`th.adv-col[data-col="${sortCol}"]`)) {
+    sortCol = 'kPriceVal'; sortDir = -1;
+    document.querySelectorAll('thead th').forEach(t => t.classList.remove('sorted'));
+    const kth = document.querySelector('th[data-col="kPriceVal"]');
+    kth.classList.add('sorted'); kth.dataset.arrow = '↓';
+  }
+  renderTable();   // re-render so advanced cells are actually built / dropped
+});
+
+// ── formatters ────────────────────────────────────────────────────────────────
+const fmtPrice = v => v != null ? `${(v * 100).toFixed(1)}¢` : '—';
+const fmtVol   = v => v ? v.toLocaleString() : '0';
+// Polymarket volume is cumulative USD (different unit than Kalshi's contract count).
+const fmtUsd   = v => v == null ? '—' : v >= 1000 ? `$${(v/1000).toFixed(1)}k` : `$${Math.round(v)}`;
+
+// ── speed / freshness ─────────────────────────────────────────────────────────
+function recordUpdate(venue, ticker) {
+  const now = Date.now();
+  const arr = (updTimes[venue][ticker] ||= []);
+  arr.push(now);
+  const cut = now - 60000;
+  while (arr.length && arr[0] < cut) arr.shift();
+}
+function ageSec(venue, ticker) {
+  const arr = updTimes[venue][ticker];
+  if (!arr || !arr.length) return Infinity;
+  return (Date.now() - arr[arr.length - 1]) / 1000;
+}
+function rateMin(venue, ticker) {
+  const arr = updTimes[venue][ticker];
+  if (!arr) return 0;
+  const cut = Date.now() - 60000;
+  while (arr.length && arr[0] < cut) arr.shift();   // trim so rate decays over time
+  return arr.length;
+}
+function freshClass(age) {
+  if (age === Infinity) return 'fresh-none';
+  if (age < FRESH_GREEN_S)  return 'fresh-green';
+  if (age < FRESH_YELLOW_S) return 'fresh-yellow';
+  return 'fresh-red';
+}
+function isStale(venue, ticker) { return ageSec(venue, ticker) > STALE_S; }
+
+// Repaint freshness dots + rates every second so they decay even with no new messages.
+function paintSpeed() {
+  for (const ticker of Object.keys(markets)) {
+    for (const v of ['k', 'p']) {
+      const dot = document.getElementById(`${v}dot-${ticker}`);
+      const rt  = document.getElementById(`${v}rate-${ticker}`);
+      if (!dot && !rt) continue;
+      const r = rateMin(v, ticker);
+      if (dot) dot.className = `fdot ${freshClass(ageSec(v, ticker))}`;
+      if (rt)  rt.innerHTML = r ? `${r}<span class="unit">/m</span>` : '—';
+    }
+    updateArb(ticker);   // refresh staleness flag on the arb cell over time
+  }
+}
+
+// ── arbitrage (JS port of arbitrage.best_arb — keep in sync) ─────────────────────
+function kalshiFee(price, contracts = 100, rate = 0.07) {
+  if (price == null || price <= 0 || price >= 1) return 0;
+  const cents = Math.ceil(Math.round(rate * contracts * price * (1 - price) * 100 * 1e6) / 1e6);
+  return (cents / 100) / contracts;
+}
+function bestArb(m) {
+  const q = v => v != null && v > 0 && v < 1;
+  const opps = [];
+  if (q(m.yes_ask) && q(m.poly_bid))           // buy K @ask, sell P @bid
+    opps.push({ net: (m.poly_bid - m.yes_ask) - kalshiFee(m.yes_ask), dir: 'K→P' });
+  if (q(m.poly_ask) && q(m.yes_bid))           // buy P @ask, sell K @bid
+    opps.push({ net: (m.yes_bid - m.poly_ask) - kalshiFee(m.yes_bid), dir: 'P→K' });
+  if (!opps.length) return null;
+  return opps.reduce((a, b) => (b.net > a.net ? b : a));
+}
+function updateArb(ticker) {
+  const m = markets[ticker]; if (!m) return;
+  const el = document.getElementById(`arb-${ticker}`); if (!el) return;
+  const a = bestArb(m);
+  m.arbNet = a ? a.net : -1;
+  const tr = el.closest('tr');
+  if (tr) tr.classList.remove('arb-live-row');
+  if (!a) { el.textContent = '—'; el.className = 'arb-cell arb-none'; return; }
+  const cents = (a.net * 100).toFixed(1);
+  if (a.net > 0) {
+    const stale = isStale('k', ticker) || isStale('p', ticker);
+    el.textContent = `${a.dir} +${cents}¢${stale ? ' ⚠' : ''}`;
+    el.className = `arb-cell ${stale ? 'arb-stale' : 'arb-live'}`;
+    if (tr && !stale) tr.classList.add('arb-live-row');
+  } else {
+    el.textContent = `${cents}¢`;
+    el.className = 'arb-cell arb-none';
+  }
+}
+
+// ── detail panel open/close ─────────────────────────────────────────────────────
+function closeDetail() {
+  selectedTicker = null;
+  document.getElementById('detailPanel').classList.add('hidden');
+  document.querySelectorAll('tbody tr').forEach(tr => tr.classList.remove('selected'));
+  if (detailChart) { detailChart.destroy(); detailChart = null; }
+}
+document.getElementById('detailClose').addEventListener('click', closeDetail);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDetail(); });
+
+// chart range buttons
+document.querySelectorAll('.chart-ranges button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.chart-ranges button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    detailRangeS = btn.dataset.range === 'Infinity' ? Infinity : Number(btn.dataset.range);
+    applyDetailData();
+  });
+});
+
+// ── init ──────────────────────────────────────────────────────────────────────
+// mark default sort header
+document.querySelector('th[data-col="kPriceVal"]').classList.add('sorted');
+document.querySelector('th[data-col="kPriceVal"]').dataset.arrow = '↓';
+setInterval(paintSpeed, 1000);
+connect();
+</script>
+</body>
+</html>
