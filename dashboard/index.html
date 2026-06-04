@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kalshi PGA Live</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --border:   #30363d;
+    --text:     #e6edf3;
+    --muted:    #8b949e;
+    --green:    #3fb950;
+    --red:      #f85149;
+    --yellow:   #d29922;
+    --blue:     #58a6ff;
+    --purple:   #bc8cff;
+    --flash-bg: rgba(210, 153, 34, 0.25);
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
+  header h1 { font-size: 15px; font-weight: 600; letter-spacing: .02em; }
+  header h1 span { color: var(--blue); }
+
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .status-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background .3s;
+  }
+  .status-dot.live  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.error { background: var(--red); }
+
+  /* ── stats bar ── */
+  .stats-bar {
+    display: flex;
+    gap: 24px;
+    padding: 8px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .stats-bar strong { color: var(--text); }
+
+  /* ── filters ── */
+  .filters {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+
+  .filters input[type="text"] {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    width: 200px;
+    outline: none;
+  }
+  .filters input[type="text"]:focus { border-color: var(--blue); }
+
+  .range-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .range-group label { white-space: nowrap; }
+  .range-group input[type="range"] {
+    width: 90px;
+    accent-color: var(--blue);
+    cursor: pointer;
+  }
+  .range-val { color: var(--text); font-weight: 500; min-width: 28px; }
+
+  .filter-count {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* ── main layout ── */
+  .main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── table pane ── */
+  .table-pane {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  thead th {
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 14px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  thead th:hover { color: var(--text); }
+  thead th.sorted { color: var(--blue); }
+  thead th.sorted::after { content: attr(data-arrow); margin-left: 4px; }
+
+  tbody tr {
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background .1s;
+  }
+  tbody tr:hover    { background: rgba(88,166,255,.05); }
+  tbody tr.selected { background: rgba(88,166,255,.10); }
+
+  td {
+    padding: 8px 14px;
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+
+  .player-name  { font-weight: 500; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+  .price-cell   { font-variant-numeric: tabular-nums; }
+  .prob-cell    { font-weight: 600; }
+  .prob-high    { color: var(--green); }
+  .prob-mid     { color: var(--yellow); }
+  .prob-low     { color: var(--muted); }
+  .vol-cell     { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .pos-cell     { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 500; }
+  .score-cell   { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .score-under  { color: var(--red); }    /* under par = lower is better, shown red like golf boards */
+  .score-over   { color: var(--muted); }
+  .score-even   { color: var(--text); }
+
+  @keyframes flash-green { from { background: rgba(63,185,80,.3); } to { background: transparent; } }
+  @keyframes flash-red   { from { background: rgba(248,81,73,.3); } to { background: transparent; } }
+  .flash-up   { animation: flash-green .7s ease-out; }
+  .flash-down { animation: flash-red   .7s ease-out; }
+
+  /* ── sparkline ── */
+  .spark svg { display: block; }
+
+  /* ── detail panel ── */
+  .detail-panel {
+    width: 380px;
+    flex-shrink: 0;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .detail-panel.hidden { display: none; }
+
+  .detail-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .detail-header .detail-player { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .detail-header .detail-meta   { font-size: 11px; color: var(--muted); }
+  .detail-prices {
+    display: flex;
+    gap: 20px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .detail-price-block label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; display: block; margin-bottom: 2px; }
+  .detail-price-block span  { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .detail-price-block.prob span { color: var(--blue); }
+
+  .detail-chart-wrap {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    height: 180px;
+    position: relative;
+  }
+
+  .detail-trades-header {
+    padding: 8px 16px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    border-bottom: 1px solid var(--border);
+  }
+  .trade-feed {
+    overflow-y: auto;
+    flex: 1;
+  }
+  .trade-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 16px;
+    border-bottom: 1px solid rgba(48,54,61,.5);
+    font-size: 12px;
+    animation: trade-in .3s ease-out;
+  }
+  @keyframes trade-in { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
+  .trade-side {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .trade-side.yes { background: rgba(63,185,80,.2);  color: var(--green); }
+  .trade-side.no  { background: rgba(248,81,73,.2);  color: var(--red); }
+  .trade-price    { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .trade-count    { color: var(--muted); }
+  .trade-time     { margin-left: auto; color: var(--muted); font-size: 11px; }
+
+  /* ── empty state ── */
+  .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .empty p { margin-top: 8px; font-size: 12px; }
+
+  /* scrollbar */
+  ::-webkit-scrollbar       { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Kalshi <span>PGA</span> Live — Memorial Tournament</h1>
+  <div class="status-pill">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Connecting...</span>
+  </div>
+</header>
+
+<div class="stats-bar">
+  <div>Markets: <strong id="statTotal">—</strong></div>
+  <div>Visible: <strong id="statVisible">—</strong></div>
+  <div>Trades today: <strong id="statTrades">—</strong></div>
+  <div>Last update: <strong id="statTime">—</strong></div>
+</div>
+
+<div class="filters">
+  <input type="text" id="searchInput" placeholder="Search player…">
+
+  <div class="range-group">
+    <label>Min prob:</label>
+    <input type="range" id="minProb" min="0" max="100" value="0" step="0.5">
+    <span class="range-val" id="minProbVal">0%</span>
+  </div>
+  <div class="range-group">
+    <label>Max prob:</label>
+    <input type="range" id="maxProb" min="0" max="100" value="100" step="0.5">
+    <span class="range-val" id="maxProbVal">100%</span>
+  </div>
+
+  <div class="filter-count" id="filterCount"></div>
+</div>
+
+<div class="main">
+  <div class="table-pane">
+    <table>
+      <thead>
+        <tr>
+          <th data-col="player"      data-arrow="↑">Player</th>
+          <th data-col="posVal"      data-arrow="↑">Pos</th>
+          <th data-col="scoreVal"    data-arrow="↑">Score</th>
+          <th data-col="yes_bid"     data-arrow="↑">Bid</th>
+          <th data-col="yes_ask"     data-arrow="↑">Ask</th>
+          <th data-col="probability" data-arrow="↑">Prob %</th>
+          <th data-col="volume"      data-arrow="↑">Volume</th>
+          <th>5m Trend</th>
+        </tr>
+      </thead>
+      <tbody id="marketTbody">
+        <tr><td colspan="8" class="empty">Waiting for data…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="detail-panel hidden" id="detailPanel">
+    <div class="detail-header">
+      <div class="detail-player" id="detailPlayer">—</div>
+      <div class="detail-meta"   id="detailTicker">—</div>
+    </div>
+    <div class="detail-prices">
+      <div class="detail-price-block">
+        <label>Bid</label>
+        <span id="detailBid">—</span>
+      </div>
+      <div class="detail-price-block">
+        <label>Ask</label>
+        <span id="detailAsk">—</span>
+      </div>
+      <div class="detail-price-block prob">
+        <label>Probability</label>
+        <span id="detailProb">—</span>
+      </div>
+      <div class="detail-price-block">
+        <label>Volume</label>
+        <span id="detailVol">—</span>
+      </div>
+    </div>
+    <div class="detail-chart-wrap">
+      <canvas id="detailChart"></canvas>
+    </div>
+    <div class="detail-trades-header">Recent Trades</div>
+    <div class="trade-feed" id="tradeFeed"></div>
+  </div>
+</div>
+
+<script>
+// ── state ────────────────────────────────────────────────────────────────────
+const markets     = {};      // ticker -> market object (server supplies pos/score/thru)
+const tickHistory = {};      // ticker -> [{ts, bid, ask}]
+const TICK_MAX    = 300;
+
+const parsePos   = p => { if (!p || p === '—') return 999; return +p.replace('T', '') || 999; };
+const parseScore = s => { if (!s || s === '—') return 999; if (s.toUpperCase() === 'E') return 0; return +s; };
+
+// Derive numeric sort keys (posVal/scoreVal) from the pos/score strings.
+function recomputeSortKeys() {
+  Object.values(markets).forEach(m => {
+    m.posVal   = parsePos(m.pos);
+    m.scoreVal = parseScore(m.score);
+  });
+}
+
+let sortCol = 'probability';
+let sortDir = -1;            // -1 = desc
+let selectedTicker = null;
+let detailChart = null;
+let totalTrades = 0;
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+let ws;
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+
+  ws.onopen = () => {
+    document.getElementById('statusDot').className  = 'status-dot live';
+    document.getElementById('statusText').textContent = 'Live';
+  };
+
+  ws.onclose = () => {
+    document.getElementById('statusDot').className  = 'status-dot error';
+    document.getElementById('statusText').textContent = 'Reconnecting…';
+    setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if      (msg.type === 'init')        onInit(msg);
+    else if (msg.type === 'ticker')      onTicker(msg);
+    else if (msg.type === 'trade')       onTrade(msg);
+    else if (msg.type === 'leaderboard') onLeaderboard(msg);
+  };
+}
+
+// ── message handlers ──────────────────────────────────────────────────────────
+function onInit(msg) {
+  msg.markets.forEach(m => {
+    markets[m.ticker]     = m;
+    tickHistory[m.ticker] = [];
+  });
+  recomputeSortKeys();
+  renderTable();
+}
+
+function onLeaderboard(msg) {
+  // Server sends a per-ticker map: { ticker: {pos, score, thru} }
+  Object.entries(msg.markets || {}).forEach(([ticker, lb]) => {
+    const m = markets[ticker];
+    if (!m) return;
+    m.pos = lb.pos; m.score = lb.score; m.thru = lb.thru;
+  });
+  recomputeSortKeys();
+  renderTable();   // once per ~60s — cheap enough for a full re-render
+}
+
+function onTicker(msg) {
+  const m = markets[msg.ticker];
+  if (!m) return;
+
+  const prevBid = m.yes_bid;
+  m.yes_bid      = msg.yes_bid;
+  m.yes_ask      = msg.yes_ask;
+  m.probability  = msg.yes_ask
+    ? +((( msg.yes_bid + msg.yes_ask) / 2) * 100).toFixed(1)
+    : +(msg.yes_bid * 100).toFixed(1);
+
+  // push to in-browser history
+  const hist = tickHistory[msg.ticker];
+  hist.push({ ts: msg.ts, bid: msg.yes_bid, ask: msg.yes_ask });
+  if (hist.length > TICK_MAX) hist.shift();
+
+  // update table cells (no full re-render)
+  updateRow(msg.ticker, prevBid);
+
+  // update detail panel if open
+  if (selectedTicker === msg.ticker) updateDetailPrices(m);
+  if (selectedTicker === msg.ticker && detailChart) pushChartPoint(msg);
+
+  document.getElementById('statTime').textContent = new Date().toLocaleTimeString();
+}
+
+function onTrade(msg) {
+  const m = markets[msg.ticker];
+  if (!m) return;
+
+  m.volume = (m.volume || 0) + (msg.count || 1);
+  totalTrades++;
+
+  const volEl = document.getElementById(`vol-${CSS.escape(msg.ticker)}`);
+  if (volEl) volEl.textContent = fmtVol(m.volume);
+
+  document.getElementById('statTrades').textContent = totalTrades.toLocaleString();
+
+  if (selectedTicker === msg.ticker) {
+    document.getElementById('detailVol').textContent = m.volume.toLocaleString();
+    prependTrade(msg);
+  }
+}
+
+// ── table rendering ───────────────────────────────────────────────────────────
+function visibleMarkets() {
+  const q       = document.getElementById('searchInput').value.toLowerCase();
+  const minProb = +document.getElementById('minProb').value;
+  const maxProb = +document.getElementById('maxProb').value;
+
+  return Object.values(markets).filter(m => {
+    if (q && !m.player.toLowerCase().includes(q)) return false;
+    const prob = Number(m.probability) || 0;   // undefined/NaN → 0, never silently passes
+    if (prob < minProb || prob > maxProb) return false;
+    return true;
+  }).sort((a, b) => {
+    const va = a[sortCol] ?? 0;
+    const vb = b[sortCol] ?? 0;
+    if (typeof va === 'string') return sortDir * va.localeCompare(vb);
+    return sortDir * (vb - va);
+  });
+}
+
+function renderTable() {
+  const rows = visibleMarkets();
+  const tbody = document.getElementById('marketTbody');
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="empty">No markets match the filter.</td></tr>`;
+    document.getElementById('filterCount').textContent = '';
+    return;
+  }
+
+  tbody.innerHTML = rows.map(m => rowHTML(m)).join('');
+
+  // attach click handlers
+  tbody.querySelectorAll('tr[data-ticker]').forEach(tr => {
+    tr.addEventListener('click', () => openDetail(tr.dataset.ticker));
+    if (tr.dataset.ticker === selectedTicker) tr.classList.add('selected');
+  });
+
+  document.getElementById('statTotal').textContent   = Object.keys(markets).length;
+  document.getElementById('filterCount').textContent = `${rows.length} of ${Object.keys(markets).length} shown`;
+  document.getElementById('statVisible').textContent = rows.length;
+}
+
+function rowHTML(m) {
+  const probClass = m.probability >= 10 ? 'prob-high' : m.probability >= 3 ? 'prob-mid' : 'prob-low';
+  const sv = m.scoreVal;
+  const scoreClass = (sv == null || sv === 999) ? 'score-even' : sv < 0 ? 'score-under' : sv > 0 ? 'score-over' : 'score-even';
+  const scoreTxt = (m.score && m.score !== '—' && m.thru && m.thru !== '—') ? `${m.score} <span style="color:var(--muted);font-weight:400">(${m.thru})</span>` : (m.score || '—');
+  return `
+    <tr data-ticker="${m.ticker}">
+      <td class="player-name" title="${m.title}">${m.player}</td>
+      <td class="pos-cell">${m.pos || '—'}</td>
+      <td class="score-cell ${scoreClass}">${scoreTxt}</td>
+      <td class="price-cell" id="bid-${m.ticker}">${fmtPrice(m.yes_bid)}</td>
+      <td class="price-cell" id="ask-${m.ticker}">${fmtPrice(m.yes_ask)}</td>
+      <td class="prob-cell ${probClass}" id="prob-${m.ticker}">${m.probability}%</td>
+      <td class="vol-cell"  id="vol-${m.ticker}">${fmtVol(m.volume)}</td>
+      <td class="spark"     id="spark-${m.ticker}">${sparkSVG(tickHistory[m.ticker] || [])}</td>
+    </tr>`;
+}
+
+function updateRow(ticker, prevBid) {
+  const m      = markets[ticker];
+  const bidEl  = document.getElementById(`bid-${ticker}`);
+  const askEl  = document.getElementById(`ask-${ticker}`);
+  const probEl = document.getElementById(`prob-${ticker}`);
+  const sparkEl = document.getElementById(`spark-${ticker}`);
+  if (!bidEl) return;
+
+  const dir = m.yes_bid > prevBid ? 'up' : m.yes_bid < prevBid ? 'down' : null;
+
+  bidEl.textContent  = fmtPrice(m.yes_bid);
+  askEl.textContent  = fmtPrice(m.yes_ask);
+  probEl.textContent = `${m.probability}%`;
+  probEl.className   = `prob-cell ${m.probability >= 10 ? 'prob-high' : m.probability >= 3 ? 'prob-mid' : 'prob-low'}`;
+  if (sparkEl) sparkEl.innerHTML = sparkSVG(tickHistory[ticker] || []);
+
+  if (dir) {
+    const cls = `flash-${dir}`;
+    [bidEl, probEl].forEach(el => {
+      el.classList.remove('flash-up', 'flash-down');
+      void el.offsetWidth; // reflow
+      el.classList.add(cls);
+      el.addEventListener('animationend', () => el.classList.remove(cls), { once: true });
+    });
+  }
+}
+
+// ── sparkline ─────────────────────────────────────────────────────────────────
+function sparkSVG(hist) {
+  if (hist.length < 2) return '<svg width="80" height="28"></svg>';
+  const vals  = hist.map(p => p.bid);
+  const min   = Math.min(...vals);
+  const max   = Math.max(...vals);
+  const range = max - min || 0.0001;
+  const W = 80, H = 28, pad = 2;
+
+  const pts = vals.map((v, i) => {
+    const x = pad + (i / (vals.length - 1)) * (W - pad * 2);
+    const y = H - pad - ((v - min) / range) * (H - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+
+  const color = vals[vals.length - 1] >= vals[0] ? '#3fb950' : '#f85149';
+  return `<svg width="${W}" height="${H}"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+}
+
+// ── detail panel ──────────────────────────────────────────────────────────────
+async function openDetail(ticker) {
+  selectedTicker = ticker;
+  const m = markets[ticker];
+
+  // highlight row
+  document.querySelectorAll('tbody tr').forEach(tr => tr.classList.remove('selected'));
+  const row = document.querySelector(`tr[data-ticker="${ticker}"]`);
+  if (row) row.classList.add('selected');
+
+  // populate header
+  document.getElementById('detailPlayer').textContent = m.player;
+  document.getElementById('detailTicker').textContent = ticker;
+  updateDetailPrices(m);
+
+  // clear trade feed
+  document.getElementById('tradeFeed').innerHTML = '';
+
+  // show panel
+  document.getElementById('detailPanel').classList.remove('hidden');
+
+  // fetch history and build chart
+  const resp = await fetch(`/api/history/${encodeURIComponent(ticker)}`);
+  const serverHist = await resp.json();
+
+  // merge server history with in-browser history (server hist is older)
+  const combined = [...serverHist, ...(tickHistory[ticker] || [])];
+  const deduped  = combined.filter((p, i, arr) => i === 0 || p.ts !== arr[i-1].ts);
+
+  buildChart(deduped);
+}
+
+function updateDetailPrices(m) {
+  document.getElementById('detailBid').textContent  = fmtPrice(m.yes_bid);
+  document.getElementById('detailAsk').textContent  = fmtPrice(m.yes_ask);
+  document.getElementById('detailProb').textContent = `${m.probability}%`;
+  document.getElementById('detailVol').textContent  = (m.volume || 0).toLocaleString();
+}
+
+function buildChart(hist) {
+  const ctx = document.getElementById('detailChart').getContext('2d');
+  if (detailChart) { detailChart.destroy(); detailChart = null; }
+
+  detailChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      datasets: [
+        {
+          label: 'Bid',
+          data:  hist.map(p => ({ x: p.ts * 1000, y: +(p.bid * 100).toFixed(2) })),
+          borderColor:     '#3fb950',
+          backgroundColor: 'rgba(63,185,80,.08)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0.3,
+          fill: false,
+        },
+        {
+          label: 'Ask',
+          data:  hist.map(p => ({ x: p.ts * 1000, y: +(p.ask * 100).toFixed(2) })),
+          borderColor:     '#58a6ff',
+          backgroundColor: 'transparent',
+          borderWidth: 1.5,
+          borderDash: [4, 3],
+          pointRadius: 0,
+          tension: 0.3,
+          fill: false,
+        },
+      ],
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#8b949e', font: { size: 11 }, boxWidth: 20 } },
+        tooltip: {
+          backgroundColor: '#161b22',
+          borderColor: '#30363d',
+          borderWidth: 1,
+          titleColor: '#8b949e',
+          bodyColor: '#e6edf3',
+          callbacks: {
+            title:  items => new Date(items[0].parsed.x).toLocaleTimeString(),
+            label:  item  => ` ${item.dataset.label}: ${item.parsed.y.toFixed(1)}¢`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: {
+            tooltipFormat: 'HH:mm:ss',
+            displayFormats: { second: 'HH:mm:ss', minute: 'HH:mm' },
+          },
+          ticks: {
+            color: '#8b949e', font: { size: 10 },
+            maxTicksLimit: 6,
+            autoSkip: true,
+          },
+          grid: { color: 'rgba(48,54,61,.6)' },
+        },
+        y: {
+          ticks: {
+            color: '#8b949e', font: { size: 10 },
+            callback: v => `${v}¢`,
+          },
+          grid: { color: 'rgba(48,54,61,.6)' },
+        },
+      },
+    },
+  });
+}
+
+function pushChartPoint(msg) {
+  if (!detailChart) return;
+  const ts = msg.ts * 1000;
+  detailChart.data.datasets[0].data.push({ x: ts, y: +(msg.yes_bid * 100).toFixed(2) });
+  detailChart.data.datasets[1].data.push({ x: ts, y: +(msg.yes_ask * 100).toFixed(2) });
+  // keep within 5-min window
+  const cutoff = Date.now() - 5 * 60 * 1000;
+  detailChart.data.datasets.forEach(ds => {
+    while (ds.data.length && ds.data[0].x < cutoff) ds.data.shift();
+  });
+  detailChart.update('none');
+}
+
+function prependTrade(msg) {
+  const feed = document.getElementById('tradeFeed');
+  const div  = document.createElement('div');
+  div.className = 'trade-item';
+  const count = msg.count ? `${msg.count} contracts` : '';
+  div.innerHTML = `
+    <span class="trade-side ${msg.side}">${msg.side.toUpperCase()}</span>
+    <span class="trade-price">${fmtPrice(msg.price)}</span>
+    <span class="trade-count">${count}</span>
+    <span class="trade-time">${new Date(msg.ts * 1000).toLocaleTimeString()}</span>
+  `;
+  feed.prepend(div);
+  // cap at 50 items
+  while (feed.children.length > 50) feed.removeChild(feed.lastChild);
+}
+
+// ── sorting ───────────────────────────────────────────────────────────────────
+document.querySelectorAll('thead th[data-col]').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (sortCol === col) {
+      sortDir *= -1;
+    } else {
+      sortCol = col;
+      sortDir = col === 'player' ? 1 : -1;
+    }
+    document.querySelectorAll('thead th').forEach(t => t.classList.remove('sorted'));
+    th.classList.add('sorted');
+    th.dataset.arrow = sortDir === -1 ? '↓' : '↑';
+    renderTable();
+  });
+});
+
+// ── filters ───────────────────────────────────────────────────────────────────
+document.getElementById('searchInput').addEventListener('input', renderTable);
+
+document.getElementById('minProb').addEventListener('input', function() {
+  document.getElementById('minProbVal').textContent = `${this.value}%`;
+  if (+this.value > +document.getElementById('maxProb').value)
+    document.getElementById('maxProb').value = this.value;
+  renderTable();
+});
+
+document.getElementById('maxProb').addEventListener('input', function() {
+  document.getElementById('maxProbVal').textContent = `${this.value}%`;
+  if (+this.value < +document.getElementById('minProb').value)
+    document.getElementById('minProb').value = this.value;
+  renderTable();
+});
+
+// ── formatters ────────────────────────────────────────────────────────────────
+const fmtPrice = v => v != null ? `${(v * 100).toFixed(1)}¢` : '—';
+const fmtVol   = v => v ? v.toLocaleString() : '0';
+
+// ── init ──────────────────────────────────────────────────────────────────────
+// mark default sort header
+document.querySelector('th[data-col="probability"]').classList.add('sorted');
+document.querySelector('th[data-col="probability"]').dataset.arrow = '↓';
+connect();
+</script>
+</body>
+</html>

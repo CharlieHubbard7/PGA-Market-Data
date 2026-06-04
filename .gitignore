@@ -1,0 +1,13 @@
+# Credentials — never commit these
+.env
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+
+# Collected data — large, grows every second, archived per-tournament separately
+kalshi_data.db
+kalshi_data*.db
