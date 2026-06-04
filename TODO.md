@@ -99,9 +99,9 @@ Work through these sequentially. Each phase builds on the last.
 
 ---
 
-## Phase 3.5 — Make it feel alive · best-odds · cleaner charts (CURRENT FOCUS)
+## Phase 3.5 — Make it feel alive · best-odds · cleaner charts (CURRENT FOCUS — confirmed do-first)
 
-Charlie's goal: get every data source flowing and presented well. Descriptive/real-time only — **no predictive model now** (that's deferred, see Phase 5).
+Charlie's goal: get every data source flowing and presented well. Descriptive/real-time only — **no predictive model now** (that's deferred, see Phase 5). **Decided: do this phase BEFORE 3.6.** Suggested build order within the phase: (1) capture `last_trade_price` + single-price column, (2) best-odds highlight, (3) detail-chart fix, (4) volume-units fix.
 
 - [ ] **Polymarket single "price" column (highlighted)** — Polymarket's app shows ONE number, not a bid/ask. Add a visually highlighted column with that number. Plan: use the live **midpoint** = (poly_bid + poly_ask)/2 (matches their implied-probability display; updates whenever the book moves), optionally toggle to **last trade price**. Add a Kalshi mid alongside so the single numbers are directly comparable.
 
@@ -119,7 +119,7 @@ Charlie's goal: get every data source flowing and presented well. Descriptive/re
 
 Goal: quantify how well each player is ACTUALLY playing — last 1 / last 3 / last 5 starts — and normalize across the field (z-score) to help judge a player's "proper value." Descriptive analytics, **not** a model.
 
-- [ ] **Research spike: what recent-form data can we actually get?** — Standalone probe (like the Polymarket one): try ESPN's golf API for per-player recent results (athlete results / event history). Output a coverage report: how many of our 72 players we can get form for, and which fields (finish position, scoring avg, strokes-gained if available). NOTE: ESPN is free but may be thin; **DataGolf** is the gold standard for strokes-gained/form but is paid — flag as the upgrade path if ESPN isn't enough. Pick the source AFTER seeing what ESPN gives.
+- [ ] **Research spike: what recent-form data can we actually get?** — **Decided: ESPN-first (free).** Standalone probe (like the Polymarket one): try ESPN's golf API for per-player recent results (athlete results / event history). Output a coverage report: how many of our 72 players we can get form for, and which fields (finish position, scoring avg, strokes-gained if available). Only if ESPN proves too thin do we revisit **DataGolf** (paid, strokes-gained) as an upgrade — not now.
 
 - [ ] **`form.py` module** — Pull recent results per player; compute last-1 / last-3 / last-5 metrics (avg finish, scoring avg, …) and a **z-score normalized across the field**; store in a new SQLite table; refresh ~daily (form changes slowly). Match players via the same `leaderboard.py` fuzzy logic.
 
