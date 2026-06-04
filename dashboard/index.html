@@ -501,7 +501,6 @@ function onTrade(msg) {
 function onPoly(msg) {
   const m = markets[msg.ticker];
   if (!m) return;
-  const prevPrice = m.polyPriceVal;
   m.poly_bid    = msg.poly_bid;
   m.poly_ask    = msg.poly_ask;
   m.poly_volume = msg.poly_volume;
@@ -515,16 +514,11 @@ function onPoly(msg) {
   if (pa) pa.textContent = fmtPrice(m.poly_ask);
   if (pv) pv.textContent = fmtUsd(m.poly_volume);
 
-  // Single "P Price" (live midpoint) — the one number Polymarket shows.
+  // Single "P Price" (live midpoint) — the one number Polymarket shows. No flash (distracting).
   const np = polyPrice(m);
   m.polyPriceVal = np ?? -1;
   const ppEl = document.getElementById(`pprice-${msg.ticker}`);
-  if (ppEl) {
-    ppEl.textContent = fmtPrice(np);
-    const dir = (np != null && prevPrice != null && prevPrice >= 0)
-      ? (np > prevPrice ? 'up' : np < prevPrice ? 'down' : null) : null;
-    if (dir) flashCell(ppEl, dir);
-  }
+  if (ppEl) ppEl.textContent = fmtPrice(np);
 
   recordUpdate('p', msg.ticker);
   updateArb(msg.ticker);
@@ -538,13 +532,6 @@ function polyPrice(m) {
   return null;
 }
 
-function flashCell(el, dir) {
-  const cls = `flash-${dir}`;
-  el.classList.remove('flash-up', 'flash-down');
-  void el.offsetWidth;
-  el.classList.add(cls);
-  el.addEventListener('animationend', () => el.classList.remove(cls), { once: true });
-}
 
 // ── table rendering ───────────────────────────────────────────────────────────
 function visibleMarkets() {
