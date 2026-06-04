@@ -89,6 +89,7 @@ async def refresh_markets_loop():
                         "event_ticker": m["event_ticker"],
                         "yes_bid":      float(m.get("yes_bid_dollars") or m.get("yes_bid") or 0),
                         "yes_ask":      float(m.get("yes_ask_dollars") or m.get("yes_ask") or 0),
+                        "volume_fp":    float(m.get("volume_fp") or 0),
                     }
             db.upsert_markets(list(markets.values()))
             print(f"[feed] {len(markets)} markets loaded")

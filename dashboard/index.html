@@ -201,9 +201,26 @@
   .arb-live-row { background: rgba(63,185,80,.10); }
   .arb-stale    { color: var(--yellow); }     /* positive edge but a quote is stale — don't trust */
 
-  /* Polymarket single-price column — the "one number", highlighted */
+  /* Kalshi single-price column — blue-tinted */
+  .k-price      { background: rgba(88,166,255,.10); color: var(--blue); font-weight: 700; font-variant-numeric: tabular-nums; }
+  th.k-price    { background: rgba(88,166,255,.10); color: var(--blue); }
+
+  /* Polymarket single-price column — purple-tinted */
   .poly-price   { background: rgba(188,140,255,.10); color: var(--purple); font-weight: 700; font-variant-numeric: tabular-nums; }
   th.poly-price { background: rgba(188,140,255,.10); color: var(--purple); }
+
+  /* Blended True price — neutral consensus */
+  .true-price   { background: rgba(255,255,255,.04); color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+  th.true-price { background: rgba(255,255,255,.04); color: var(--text); font-weight: 700; }
+
+  /* Confidence band: wide spread = price is less trustworthy */
+  .conf-medium  { opacity: .65; }
+  .conf-wide    { color: var(--muted) !important; opacity: .5; font-style: italic; }
+  .conf-none    { color: var(--muted) !important; opacity: .35; }
+
+  /* Best-ask indicator: subtle left border on whichever venue has the lower ask */
+  .best-ask     { box-shadow: inset 3px 0 0 var(--green); }
+
   .pos-cell     { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 500; }
   .score-cell   { font-variant-numeric: tabular-nums; font-weight: 600; }
   .score-under  { color: var(--red); }    /* under par = lower is better, shown red like golf boards */
@@ -330,12 +347,10 @@
           <th data-col="player"      data-arrow="↑">Player</th>
           <th data-col="posVal"      data-arrow="↑">Pos</th>
           <th data-col="scoreVal"    data-arrow="↑">Score</th>
-          <th data-col="yes_bid"     data-arrow="↑" class="col-k">K Bid</th>
-          <th data-col="poly_bid"    data-arrow="↑" class="col-p">P Bid</th>
-          <th data-col="yes_ask"     data-arrow="↑" class="col-k">K Ask</th>
-          <th data-col="poly_ask"    data-arrow="↑" class="col-p">P Ask</th>
-          <th data-col="polyPriceVal" data-arrow="↑" class="poly-price" title="Polymarket price (live midpoint)">P Price</th>
-          <th data-col="volume"      data-arrow="↑" class="col-k">K Vol</th>
+          <th data-col="kPriceVal"   data-arrow="↑" class="k-price"    title="Kalshi price — (bid+ask)/2">K Price</th>
+          <th data-col="polyPriceVal" data-arrow="↑" class="poly-price" title="Polymarket price — mid when spread ≤10¢, else last trade">P Price</th>
+          <th data-col="truePriceVal" data-arrow="↑" class="true-price" title="Blended consensus — K and P weighted by update rate">True</th>
+          <th data-col="volume_fp"   data-arrow="↑" class="col-k">K Vol</th>
           <th data-col="poly_volume" data-arrow="↑" class="col-p">P Vol</th>
           <th>Speed</th>
           <th data-col="arbNet"      data-arrow="↑">Arb</th>
@@ -343,7 +358,7 @@
         </tr>
       </thead>
       <tbody id="marketTbody">
-        <tr><td colspan="13" class="empty">Waiting for data…</td></tr>
+        <tr><td colspan="11" class="empty">Waiting for data…</td></tr>
       </tbody>
     </table>
   </div>
@@ -355,15 +370,23 @@
     </div>
     <div class="detail-prices">
       <div class="detail-price-block">
-        <label>Bid</label>
-        <span id="detailBid">—</span>
+        <label>K Bid</label>
+        <span id="detailBid" style="color:var(--blue)">—</span>
       </div>
       <div class="detail-price-block">
-        <label>Ask</label>
-        <span id="detailAsk">—</span>
+        <label>K Ask</label>
+        <span id="detailAsk" style="color:var(--blue)">—</span>
       </div>
       <div class="detail-price-block">
-        <label>Volume</label>
+        <label>P Bid</label>
+        <span id="detailPBid" style="color:var(--purple)">—</span>
+      </div>
+      <div class="detail-price-block">
+        <label>P Ask</label>
+        <span id="detailPAsk" style="color:var(--purple)">—</span>
+      </div>
+      <div class="detail-price-block">
+        <label>K Vol</label>
         <span id="detailVol">—</span>
       </div>
     </div>
@@ -391,17 +414,18 @@ const parseScore = s => { if (!s || s === '—') return 999; if (s.toUpperCase()
 // Derive numeric sort keys (posVal/scoreVal) from the pos/score strings.
 function recomputeSortKeys() {
   Object.values(markets).forEach(m => {
-    m.posVal   = parsePos(m.pos);
-    m.scoreVal = parseScore(m.score);
+    m.posVal       = parsePos(m.pos);
+    m.scoreVal     = parseScore(m.score);
     const a = bestArb(m);
-    m.arbNet = a ? a.net : -1;   // negative sentinel so no-opp rows sort below real edges
-    const pp = polyPrice(m);
-    m.polyPriceVal = pp ?? -1;
+    m.arbNet       = a ? a.net : -1;
+    m.kPriceVal    = kPrice(m)    ?? -1;
+    m.polyPriceVal = polyPrice(m) ?? -1;
+    m.truePriceVal = truePrice(m) ?? -1;
   });
 }
 
-let sortCol = 'yes_bid';
-let sortDir = -1;            // -1 = desc (highest bid first ≈ favorites on top)
+let sortCol = 'kPriceVal';
+let sortDir = -1;            // -1 = desc (highest price first ≈ favorites on top)
 let selectedTicker = null;
 let detailChart = null;
 let totalTrades = 0;
@@ -485,10 +509,12 @@ function onTrade(msg) {
   if (!m) return;
 
   m.volume = (m.volume || 0) + (msg.count || 1);
+  // Increment volume_fp live using price × count (in dollars)
+  if (msg.price != null && msg.count) m.volume_fp = (m.volume_fp || 0) + msg.price * msg.count;
   totalTrades++;
 
   const volEl = document.getElementById(`vol-${CSS.escape(msg.ticker)}`);
-  if (volEl) volEl.textContent = fmtVol(m.volume);
+  if (volEl) volEl.textContent = fmtUsd(m.volume_fp);
 
   document.getElementById('statTrades').textContent = totalTrades.toLocaleString();
 
@@ -504,22 +530,28 @@ function onPoly(msg) {
   m.poly_bid    = msg.poly_bid;
   m.poly_ask    = msg.poly_ask;
   m.poly_volume = msg.poly_volume;
-  if (msg.poly_last  != null) m.poly_last  = msg.poly_last;
-  if (msg.poly_mid   != null) m.poly_mid   = msg.poly_mid;
-  m.poly_price = msg.poly_price;
-  // Targeted updates to the P rows (no full re-render), mirroring updateRow.
-  const pb = document.getElementById(`pbid-${msg.ticker}`);
-  const pa = document.getElementById(`pask-${msg.ticker}`);
-  const pv = document.getElementById(`pvol-${msg.ticker}`);
-  if (pb) pb.textContent = fmtPrice(m.poly_bid);
-  if (pa) pa.textContent = fmtPrice(m.poly_ask);
-  if (pv) pv.textContent = fmtUsd(m.poly_volume);
+  if (msg.poly_last != null) m.poly_last = msg.poly_last;
+  if (msg.poly_mid  != null) m.poly_mid  = msg.poly_mid;
+  m.poly_price  = msg.poly_price;
+  m.polyPriceVal = polyPrice(m) ?? -1;
 
-  // Single "P Price" (live midpoint) — the one number Polymarket shows. No flash (distracting).
-  const np = polyPrice(m);
-  m.polyPriceVal = np ?? -1;
+  const bv  = bestBuyVenue(m);
+  const pcc = pConfClass(m);
+  const kcc = kConfClass(m);
+
   const ppEl = document.getElementById(`pprice-${msg.ticker}`);
-  if (ppEl) ppEl.textContent = fmtPrice(np);
+  if (ppEl) {
+    ppEl.textContent = fmtPrice(polyPrice(m));
+    ppEl.className = `poly-price${pcc ? ' '+pcc : ''}${bv === 'p' ? ' best-ask' : ''}`;
+  }
+  const kpEl = document.getElementById(`kprice-${msg.ticker}`);
+  if (kpEl) kpEl.className = `k-price${kcc ? ' '+kcc : ''}${bv === 'k' ? ' best-ask' : ''}`;
+
+  const pvEl = document.getElementById(`pvol-${msg.ticker}`);
+  if (pvEl) pvEl.textContent = fmtUsd(m.poly_volume);
+
+  const tpEl = document.getElementById(`trueprice-${msg.ticker}`);
+  if (tpEl) tpEl.textContent = fmtPrice(truePrice(m));
 
   recordUpdate('p', msg.ticker);
   updateArb(msg.ticker);
@@ -535,6 +567,51 @@ function polyPrice(m) {
   return null;
 }
 
+
+// ── price helpers ─────────────────────────────────────────────────────────────
+function kPrice(m) {
+  if (m.yes_bid == null || m.yes_ask == null) return null;
+  return (m.yes_bid + m.yes_ask) / 2;
+}
+
+// Confidence CSS class based on spread width
+function kConfClass(m) {
+  const s = (m.yes_ask != null && m.yes_bid != null) ? m.yes_ask - m.yes_bid : null;
+  if (s == null) return 'conf-none';
+  if (s <= 0.05) return '';            // ≤5¢ tight — no class needed, full opacity
+  if (s <= 0.15) return 'conf-medium'; // 5-15¢
+  return 'conf-wide';                  // >15¢ — don't trust the mid
+}
+function pConfClass(m) {
+  const s = (m.poly_ask != null && m.poly_bid != null) ? m.poly_ask - m.poly_bid : null;
+  if (s == null) return 'conf-none';
+  if (s <= 0.10) return '';            // ≤10¢ — uses mid, trustworthy (matches pricing rule)
+  if (s <= 0.20) return 'conf-medium'; // 10-20¢ — using last trade
+  return 'conf-wide';                  // >20¢
+}
+
+// Which venue has the lower ask (better for someone buying YES)?
+function bestBuyVenue(m) {
+  const ka = m.yes_ask, pa = m.poly_ask;
+  if (ka == null && pa == null) return null;
+  if (ka == null) return 'p';
+  if (pa == null) return 'k';
+  if (ka < pa - 0.001) return 'k';
+  if (pa < ka - 0.001) return 'p';
+  return null;
+}
+
+// Blended "True" price — K and P weighted by recent update rate
+function truePrice(m) {
+  const kp = kPrice(m);
+  const pp = polyPrice(m);
+  if (kp == null && pp == null) return null;
+  if (kp == null) return pp;
+  if (pp == null) return kp;
+  const kr = rateMin('k', m.ticker) || 1;
+  const pr = rateMin('p', m.ticker) || 1;
+  return (kp * kr + pp * pr) / (kr + pr);
+}
 
 // ── table rendering ───────────────────────────────────────────────────────────
 function visibleMarkets() {
@@ -556,7 +633,7 @@ function renderTable() {
   const tbody = document.getElementById('marketTbody');
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="13" class="empty">No markets match the filter.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" class="empty">No markets match the filter.</td></tr>`;
     document.getElementById('filterCount').textContent = '';
     return;
   }
@@ -578,17 +655,16 @@ function rowHTML(m) {
   const sv = m.scoreVal;
   const scoreClass = (sv == null || sv === 999) ? 'score-even' : sv < 0 ? 'score-under' : sv > 0 ? 'score-over' : 'score-even';
   const scoreTxt = (m.score && m.score !== '—' && m.thru && m.thru !== '—') ? `${m.score} <span style="color:var(--muted);font-weight:400">(${m.thru})</span>` : (m.score || '—');
+  const bv = bestBuyVenue(m);
   return `
     <tr data-ticker="${m.ticker}">
       <td class="player-name" title="${m.title}">${m.player}</td>
       <td class="pos-cell">${m.pos || '—'}</td>
       <td class="score-cell ${scoreClass}">${scoreTxt}</td>
-      <td class="price-cell" id="bid-${m.ticker}">${fmtPrice(m.yes_bid)}</td>
-      <td class="price-cell" id="pbid-${m.ticker}">${fmtPrice(m.poly_bid)}</td>
-      <td class="price-cell" id="ask-${m.ticker}">${fmtPrice(m.yes_ask)}</td>
-      <td class="price-cell" id="pask-${m.ticker}">${fmtPrice(m.poly_ask)}</td>
-      <td class="poly-price" id="pprice-${m.ticker}">${fmtPrice(polyPrice(m))}</td>
-      <td class="vol-cell"   id="vol-${m.ticker}">${fmtVol(m.volume)}</td>
+      <td class="k-price ${kConfClass(m)}${bv === 'k' ? ' best-ask' : ''}" id="kprice-${m.ticker}">${fmtPrice(kPrice(m))}</td>
+      <td class="poly-price ${pConfClass(m)}${bv === 'p' ? ' best-ask' : ''}" id="pprice-${m.ticker}">${fmtPrice(polyPrice(m))}</td>
+      <td class="true-price" id="trueprice-${m.ticker}">${fmtPrice(truePrice(m))}</td>
+      <td class="vol-cell"   id="vol-${m.ticker}">${fmtUsd(m.volume_fp)}</td>
       <td class="vol-cell"   id="pvol-${m.ticker}">${fmtUsd(m.poly_volume)}</td>
       <td class="speed-cell">
         <div class="kp-row"><span class="kp-tag k">K</span><span class="fdot fresh-none" id="kdot-${m.ticker}">●</span><span class="rate" id="krate-${m.ticker}">—</span></div>
@@ -600,26 +676,34 @@ function rowHTML(m) {
 }
 
 function updateRow(ticker, prevBid) {
-  const m      = markets[ticker];
-  const bidEl  = document.getElementById(`bid-${ticker}`);
-  const askEl  = document.getElementById(`ask-${ticker}`);
+  const m = markets[ticker];
+  const kpEl  = document.getElementById(`kprice-${ticker}`);
   const sparkEl = document.getElementById(`spark-${ticker}`);
-  if (!bidEl) return;
+  if (!kpEl) return;
+
+  const bv  = bestBuyVenue(m);
+  const kcc = kConfClass(m);
+  const pcc = pConfClass(m);
 
   const dir = m.yes_bid > prevBid ? 'up' : m.yes_bid < prevBid ? 'down' : null;
+  kpEl.textContent = fmtPrice(kPrice(m));
+  kpEl.className = `k-price${kcc ? ' '+kcc : ''}${bv === 'k' ? ' best-ask' : ''}`;
 
-  bidEl.textContent  = fmtPrice(m.yes_bid);
-  askEl.textContent  = fmtPrice(m.yes_ask);
+  // update best-ask indicator on P Price cell when K price changes (bv can flip)
+  const ppEl = document.getElementById(`pprice-${ticker}`);
+  if (ppEl) ppEl.className = `poly-price${pcc ? ' '+pcc : ''}${bv === 'p' ? ' best-ask' : ''}`;
+
+  // update True price
+  const tpEl = document.getElementById(`trueprice-${ticker}`);
+  if (tpEl) tpEl.textContent = fmtPrice(truePrice(m));
+
   if (sparkEl) sparkEl.innerHTML = sparkSVG(tickHistory[ticker] || []);
 
   if (dir) {
-    const cls = `flash-${dir}`;
-    [bidEl].forEach(el => {
-      el.classList.remove('flash-up', 'flash-down');
-      void el.offsetWidth; // reflow
-      el.classList.add(cls);
-      el.addEventListener('animationend', () => el.classList.remove(cls), { once: true });
-    });
+    kpEl.classList.remove('flash-up', 'flash-down');
+    void kpEl.offsetWidth;
+    kpEl.classList.add(`flash-${dir}`);
+    kpEl.addEventListener('animationend', () => kpEl.classList.remove(`flash-${dir}`), { once: true });
   }
 }
 
@@ -677,7 +761,9 @@ async function openDetail(ticker) {
 function updateDetailPrices(m) {
   document.getElementById('detailBid').textContent  = fmtPrice(m.yes_bid);
   document.getElementById('detailAsk').textContent  = fmtPrice(m.yes_ask);
-  document.getElementById('detailVol').textContent  = (m.volume || 0).toLocaleString();
+  document.getElementById('detailPBid').textContent = fmtPrice(m.poly_bid);
+  document.getElementById('detailPAsk').textContent = fmtPrice(m.poly_ask);
+  document.getElementById('detailVol').textContent  = fmtUsd(m.volume_fp) || (m.volume || 0).toLocaleString();
 }
 
 function buildChart(hist) {
@@ -892,8 +978,8 @@ function updateArb(ticker) {
 
 // ── init ──────────────────────────────────────────────────────────────────────
 // mark default sort header
-document.querySelector('th[data-col="yes_bid"]').classList.add('sorted');
-document.querySelector('th[data-col="yes_bid"]').dataset.arrow = '↓';
+document.querySelector('th[data-col="kPriceVal"]').classList.add('sorted');
+document.querySelector('th[data-col="kPriceVal"]').dataset.arrow = '↓';
 setInterval(paintSpeed, 1000);
 connect();
 </script>
