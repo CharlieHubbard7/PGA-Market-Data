@@ -158,6 +158,17 @@ async def get_history(ticker: str):
     return JSONResponse(list(feed.ticks.get(ticker, [])))
 
 
+@app.get("/api/poly-history/{ticker}")
+async def get_poly_history(ticker: str):
+    """Polymarket bid/ask history for a Kalshi ticker, from in-memory poly_ticks.
+    Lets the detail chart overlay the P price line on top of the K line."""
+    _ensure_poly_map()
+    cid = next((c for c, tk in _cid_to_ticker.items() if tk == ticker), None)
+    if not cid:
+        return JSONResponse([])
+    return JSONResponse(list(polymarket_feed.poly_ticks.get(cid, [])))
+
+
 @app.get("/api/leaderboard")
 async def get_leaderboard():
     return JSONResponse(leaderboard.board)

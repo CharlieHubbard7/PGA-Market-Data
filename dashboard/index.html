@@ -167,12 +167,13 @@
   tbody tr.selected { background: rgba(88,166,255,.10); }
 
   td {
-    padding: 8px 14px;
+    padding: 10px 18px;
     white-space: nowrap;
     vertical-align: middle;
   }
+  thead th { padding: 9px 18px; }
 
-  .player-name  { font-weight: 500; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+  .player-name  { font-weight: 500; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
   .price-cell   { font-variant-numeric: tabular-nums; }
   .vol-cell     { color: var(--muted); font-variant-numeric: tabular-nums; }
 
@@ -235,24 +236,66 @@
   /* ── sparkline ── */
   .spark svg { display: block; }
 
-  /* ── detail panel ── */
+  /* ── detail panel — overlay drawer so the table keeps full width ── */
   .detail-panel {
-    width: 380px;
-    flex-shrink: 0;
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: 440px;
+    z-index: 100;
     background: var(--surface);
     border-left: 1px solid var(--border);
+    box-shadow: -8px 0 24px rgba(0,0,0,.45);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    transition: transform .18s ease-out;
   }
-  .detail-panel.hidden { display: none; }
+  .detail-panel.hidden { transform: translateX(100%); pointer-events: none; }
 
   .detail-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
     padding: 14px 16px;
     border-bottom: 1px solid var(--border);
   }
   .detail-header .detail-player { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
   .detail-header .detail-meta   { font-size: 11px; color: var(--muted); }
+  .detail-close {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 26px; height: 26px;
+    border-radius: 6px;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all .15s;
+  }
+  .detail-close:hover { color: var(--text); border-color: var(--muted); background: rgba(255,255,255,.05); }
+
+  /* chart range buttons */
+  .chart-ranges {
+    display: flex;
+    gap: 6px;
+    padding: 8px 16px 0;
+  }
+  .chart-ranges button {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 5px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    transition: all .15s;
+  }
+  .chart-ranges button:hover  { color: var(--text); }
+  .chart-ranges button.active { color: var(--text); border-color: var(--blue); background: rgba(88,166,255,.12); }
   .detail-prices {
     display: flex;
     gap: 20px;
@@ -365,30 +408,34 @@
 
   <div class="detail-panel hidden" id="detailPanel">
     <div class="detail-header">
-      <div class="detail-player" id="detailPlayer">—</div>
-      <div class="detail-meta"   id="detailTicker">—</div>
+      <div>
+        <div class="detail-player" id="detailPlayer">—</div>
+        <div class="detail-meta"   id="detailTicker">—</div>
+      </div>
+      <button class="detail-close" id="detailClose" title="Close (Esc)">✕</button>
     </div>
     <div class="detail-prices">
       <div class="detail-price-block">
-        <label>K Bid</label>
-        <span id="detailBid" style="color:var(--blue)">—</span>
+        <label>K Price</label>
+        <span id="detailKPrice" style="color:var(--blue)">—</span>
       </div>
       <div class="detail-price-block">
-        <label>K Ask</label>
-        <span id="detailAsk" style="color:var(--blue)">—</span>
+        <label>P Price</label>
+        <span id="detailPPrice" style="color:var(--purple)">—</span>
       </div>
       <div class="detail-price-block">
-        <label>P Bid</label>
-        <span id="detailPBid" style="color:var(--purple)">—</span>
+        <label>K Bid / Ask</label>
+        <span id="detailKBA" style="font-size:13px">—</span>
       </div>
       <div class="detail-price-block">
-        <label>P Ask</label>
-        <span id="detailPAsk" style="color:var(--purple)">—</span>
+        <label>P Bid / Ask</label>
+        <span id="detailPBA" style="font-size:13px">—</span>
       </div>
-      <div class="detail-price-block">
-        <label>K Vol</label>
-        <span id="detailVol">—</span>
-      </div>
+    </div>
+    <div class="chart-ranges">
+      <button data-range="300"      class="active">5m</button>
+      <button data-range="1800">30m</button>
+      <button data-range="Infinity">All</button>
     </div>
     <div class="detail-chart-wrap">
       <canvas id="detailChart"></canvas>
@@ -428,6 +475,8 @@ let sortCol = 'kPriceVal';
 let sortDir = -1;            // -1 = desc (highest price first ≈ favorites on top)
 let selectedTicker = null;
 let detailChart = null;
+let detailData = { k: [], p: [] };   // {ts, v} price series for the open market
+let detailRangeS = 300;              // chart window in seconds (5m default; Infinity = all)
 let totalTrades = 0;
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -500,8 +549,10 @@ function onTicker(msg) {
   updateArb(msg.ticker);
 
   // update detail panel if open
-  if (selectedTicker === msg.ticker) updateDetailPrices(m);
-  if (selectedTicker === msg.ticker && detailChart) pushChartPoint(msg);
+  if (selectedTicker === msg.ticker) {
+    updateDetailPrices(m);
+    pushDetailPoint('k', msg.ts, kPrice(m));
+  }
 
   document.getElementById('statTime').textContent = new Date().toLocaleTimeString();
 }
@@ -525,7 +576,7 @@ function onTrade(msg) {
   document.getElementById('statTrades').textContent = totalTrades.toLocaleString();
 
   if (selectedTicker === msg.ticker) {
-    document.getElementById('detailVol').textContent = m.volume.toLocaleString();
+    updateDetailPrices(m);
     prependTrade(msg);
   }
 }
@@ -558,6 +609,12 @@ function onPoly(msg) {
 
   const tpEl = document.getElementById(`trueprice-${msg.ticker}`);
   if (tpEl) tpEl.textContent = fmtPrice(truePrice(m));
+
+  // live detail panel + chart (P side)
+  if (selectedTicker === msg.ticker) {
+    updateDetailPrices(m);
+    pushDetailPoint('p', Date.now() / 1000, polyPrice(m));
+  }
 
   recordUpdate('p', msg.ticker);
   updateArb(msg.ticker);
@@ -776,26 +833,45 @@ async function openDetail(ticker) {
   // show panel
   document.getElementById('detailPanel').classList.remove('hidden');
 
-  // fetch history and build chart
-  const resp = await fetch(`/api/history/${encodeURIComponent(ticker)}`);
-  const serverHist = await resp.json();
+  // fetch BOTH venue histories in parallel, build the price series for each
+  const enc = encodeURIComponent(ticker);
+  const [kRaw, pRaw] = await Promise.all([
+    fetch(`/api/history/${enc}`).then(r => r.json()).catch(() => []),
+    fetch(`/api/poly-history/${enc}`).then(r => r.json()).catch(() => []),
+  ]);
+  if (selectedTicker !== ticker) return;   // user clicked away while fetching
 
-  // merge server history with in-browser history (server hist is older)
-  const combined = [...serverHist, ...(tickHistory[ticker] || [])];
-  const deduped  = combined.filter((p, i, arr) => i === 0 || p.ts !== arr[i-1].ts);
+  const kHist = dedupeTicks([...kRaw, ...(tickHistory[ticker] || [])]);
+  detailData.k = kHist.map(p => ({ ts: p.ts, v: tickPrice(p) })).filter(d => d.v != null);
+  detailData.p = dedupeTicks(pRaw).map(p => ({ ts: p.ts, v: tickPrice(p) })).filter(d => d.v != null);
 
-  buildChart(deduped);
+  buildChart();
+}
+
+// sort by time + drop consecutive duplicate timestamps (kills vertical staircases)
+function dedupeTicks(hist) {
+  const s = [...hist].sort((a, b) => a.ts - b.ts);
+  return s.filter((p, i) => i === 0 || p.ts !== s[i - 1].ts);
+}
+
+// Append a live point to the open market's series and refresh the chart.
+function pushDetailPoint(venue, ts, price) {
+  if (price == null || !detailChart) return;
+  const arr = detailData[venue];
+  if (arr.length && ts <= arr[arr.length - 1].ts) ts = arr[arr.length - 1].ts + 0.001;  // keep monotonic
+  arr.push({ ts, v: price });
+  if (arr.length > 5000) arr.shift();
+  applyDetailData();
 }
 
 function updateDetailPrices(m) {
-  document.getElementById('detailBid').textContent  = fmtPrice(m.yes_bid);
-  document.getElementById('detailAsk').textContent  = fmtPrice(m.yes_ask);
-  document.getElementById('detailPBid').textContent = fmtPrice(m.poly_bid);
-  document.getElementById('detailPAsk').textContent = fmtPrice(m.poly_ask);
-  document.getElementById('detailVol').textContent  = (m.volume || 0).toLocaleString();
+  document.getElementById('detailKPrice').textContent = fmtPrice(kPrice(m));
+  document.getElementById('detailPPrice').textContent = fmtPrice(polyPrice(m));
+  document.getElementById('detailKBA').textContent = `${fmtPrice(m.yes_bid)} / ${fmtPrice(m.yes_ask)}`;
+  document.getElementById('detailPBA').textContent = `${fmtPrice(m.poly_bid)} / ${fmtPrice(m.poly_ask)}`;
 }
 
-function buildChart(hist) {
+function buildChart() {
   const ctx = document.getElementById('detailChart').getContext('2d');
   if (detailChart) { detailChart.destroy(); detailChart = null; }
 
@@ -804,25 +880,26 @@ function buildChart(hist) {
     data: {
       datasets: [
         {
-          label: 'Bid',
-          data:  hist.map(p => ({ x: p.ts * 1000, y: +(p.bid * 100).toFixed(2) })),
-          borderColor:     '#3fb950',
-          backgroundColor: 'rgba(63,185,80,.08)',
-          borderWidth: 1.5,
+          label: 'K Price',
+          data: [],
+          borderColor:     '#58a6ff',
+          backgroundColor: 'rgba(88,166,255,.08)',
+          borderWidth: 1.8,
           pointRadius: 0,
-          tension: 0.3,
+          tension: 0.25,
           fill: false,
+          spanGaps: true,
         },
         {
-          label: 'Ask',
-          data:  hist.map(p => ({ x: p.ts * 1000, y: +(p.ask * 100).toFixed(2) })),
-          borderColor:     '#58a6ff',
+          label: 'P Price',
+          data: [],
+          borderColor:     '#bc8cff',
           backgroundColor: 'transparent',
-          borderWidth: 1.5,
-          borderDash: [4, 3],
+          borderWidth: 1.8,
           pointRadius: 0,
-          tension: 0.3,
+          tension: 0.25,
           fill: false,
+          spanGaps: true,
         },
       ],
     },
@@ -832,7 +909,7 @@ function buildChart(hist) {
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: { labels: { color: '#8b949e', font: { size: 11 }, boxWidth: 20 } },
+        legend: { labels: { color: '#8b949e', font: { size: 11 }, boxWidth: 20, usePointStyle: true } },
         tooltip: {
           backgroundColor: '#161b22',
           borderColor: '#30363d',
@@ -852,35 +929,26 @@ function buildChart(hist) {
             tooltipFormat: 'HH:mm:ss',
             displayFormats: { second: 'HH:mm:ss', minute: 'HH:mm' },
           },
-          ticks: {
-            color: '#8b949e', font: { size: 10 },
-            maxTicksLimit: 6,
-            autoSkip: true,
-          },
+          ticks: { color: '#8b949e', font: { size: 10 }, maxTicksLimit: 6, autoSkip: true },
           grid: { color: 'rgba(48,54,61,.6)' },
         },
         y: {
-          ticks: {
-            color: '#8b949e', font: { size: 10 },
-            callback: v => `${v}¢`,
-          },
+          ticks: { color: '#8b949e', font: { size: 10 }, callback: v => `${v}¢` },
           grid: { color: 'rgba(48,54,61,.6)' },
         },
       },
     },
   });
+  applyDetailData();
 }
 
-function pushChartPoint(msg) {
+// Filter both series to the active range window and push into the chart.
+function applyDetailData() {
   if (!detailChart) return;
-  const ts = msg.ts * 1000;
-  detailChart.data.datasets[0].data.push({ x: ts, y: +(msg.yes_bid * 100).toFixed(2) });
-  detailChart.data.datasets[1].data.push({ x: ts, y: +(msg.yes_ask * 100).toFixed(2) });
-  // keep within 5-min window
-  const cutoff = Date.now() - 5 * 60 * 1000;
-  detailChart.data.datasets.forEach(ds => {
-    while (ds.data.length && ds.data[0].x < cutoff) ds.data.shift();
-  });
+  const cutoff = detailRangeS === Infinity ? 0 : (Date.now() / 1000) - detailRangeS;
+  const toXY = arr => arr.filter(d => d.ts >= cutoff).map(d => ({ x: d.ts * 1000, y: +(d.v * 100).toFixed(2) }));
+  detailChart.data.datasets[0].data = toXY(detailData.k);
+  detailChart.data.datasets[1].data = toXY(detailData.p);
   detailChart.update('none');
 }
 
@@ -1004,6 +1072,26 @@ function updateArb(ticker) {
     el.className = 'arb-cell arb-none';
   }
 }
+
+// ── detail panel open/close ─────────────────────────────────────────────────────
+function closeDetail() {
+  selectedTicker = null;
+  document.getElementById('detailPanel').classList.add('hidden');
+  document.querySelectorAll('tbody tr').forEach(tr => tr.classList.remove('selected'));
+  if (detailChart) { detailChart.destroy(); detailChart = null; }
+}
+document.getElementById('detailClose').addEventListener('click', closeDetail);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDetail(); });
+
+// chart range buttons
+document.querySelectorAll('.chart-ranges button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.chart-ranges button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    detailRangeS = btn.dataset.range === 'Infinity' ? Infinity : Number(btn.dataset.range);
+    applyDetailData();
+  });
+});
 
 // ── init ──────────────────────────────────────────────────────────────────────
 // mark default sort header
