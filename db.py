@@ -66,6 +66,7 @@ def init_db():
                 ts           REAL    NOT NULL,
                 athlete_id   TEXT,
                 player_name  TEXT    NOT NULL,
+                owgr         INTEGER,
                 form_score   REAL,
                 avg_l5       REAL,
                 avg_l3       REAL,
@@ -94,6 +95,8 @@ def init_db():
         for col in ("drive_dist", "drive_acc", "gir_pct", "putts_gir", "birdies_rnd", "sand_save"):
             if col not in existing:
                 conn.execute(f"ALTER TABLE form ADD COLUMN {col} REAL")
+        if "owgr" not in existing:
+            conn.execute("ALTER TABLE form ADD COLUMN owgr INTEGER")
 
 
 def upsert_markets(markets: list[dict]):
@@ -156,11 +159,11 @@ def write_form(rows: list[dict]):
         return (r.get("skills", {}).get(key) or {}).get("value")
     with _conn() as conn:
         conn.executemany(
-            "INSERT INTO form (ts, athlete_id, player_name, form_score, avg_l5, avg_l3, "
+            "INSERT INTO form (ts, athlete_id, player_name, owgr, form_score, avg_l5, avg_l3, "
             "last1, made_cut_pct, scoring_avg, top10, wins, events, "
             "drive_dist, drive_acc, gir_pct, putts_gir, birdies_rnd, sand_save) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [(ts, r.get("athlete_id"), r["name"], r.get("form_score"), r.get("avg_l5"),
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [(ts, r.get("athlete_id"), r["name"], r.get("owgr"), r.get("form_score"), r.get("avg_l5"),
               r.get("avg_l3"), r.get("last1"), r.get("made_cut_pct"), r.get("scoring_avg"),
               r.get("top10"), r.get("wins"), r.get("events"),
               sk(r, "drive_dist"), sk(r, "drive_acc"), r.get("gir_pct"),

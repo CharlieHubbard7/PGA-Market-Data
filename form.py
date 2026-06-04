@@ -33,6 +33,9 @@ from leaderboard import normalize_name, _fuzzy_key
 
 SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/golf/pga/scoreboard"
 OVERVIEW   = "https://site.web.api.espn.com/apis/common/v3/sports/golf/pga/athletes/{id}/overview"
+# Official World Golf Ranking — modern owgr.com JSON API (no scraping needed).
+# top-1000 in one call covers any PGA-Tour-event field. Updates weekly.
+OWGR_URL   = "https://apiweb.owgr.com/api/owgr/rankings/getRankings?pageSize=1000&pageNumber=1&country=All&sortString=rank%20ASC"
 REFRESH_SECONDS = 6 * 3600   # form moves between events; 6h is plenty
 TIMEOUT = 15
 
@@ -179,6 +182,41 @@ def _fetch_one(player: dict, cur_event: str | None) -> dict:
     return row
 
 
+def _fetch_owgr() -> dict:
+    """Current World Golf Ranking → {fullName: rank} for the top ~1000."""
+    hdr = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    j = requests.get(OWGR_URL, headers=hdr, timeout=20).json()
+    out = {}
+    for e in j.get("rankingsList", []):
+        name = (e.get("player") or {}).get("fullName")
+        if name and e.get("rank") is not None:
+            out[name] = e["rank"]
+    return out
+
+
+def _attach_owgr(rows: list[dict]) -> None:
+    """Annotate each row with r['owgr'] (world ranking) via the leaderboard matcher."""
+    try:
+        owgr = _fetch_owgr()
+    except Exception as e:
+        print(f"[form] owgr fetch error: {e}", flush=True)
+        for r in rows:
+            r.setdefault("owgr", None)
+        return
+    by_norm = {normalize_name(n): rk for n, rk in owgr.items()}
+    by_key = {}
+    for n, rk in owgr.items():
+        k = _fuzzy_key(n)
+        if k:
+            by_key.setdefault(k, rk)   # best (lowest) rank wins — list is rank-sorted
+    for r in rows:
+        rk = by_norm.get(normalize_name(r["name"]))
+        if rk is None:
+            k = _fuzzy_key(r["name"])
+            rk = by_key.get(k) if k else None
+        r["owgr"] = rk
+
+
 def _zscore(rows, field, invert=False):
     vals = [r[field] for r in rows if r.get(field) is not None]
     if len(vals) < 3:
@@ -205,6 +243,7 @@ def build_form() -> list[dict]:
     for r in rows:
         zs = [r[k] for k in ("avg_l5_z", "scoring_avg_z") if r.get(k) is not None]
         r["form_score"] = round(statistics.mean(zs), 2) if zs else None
+    _attach_owgr(rows)
     return rows
 
 
@@ -229,6 +268,7 @@ def _apply(rows: list[dict]) -> dict:
         if not r:
             continue
         wire = {
+            "owgr":         r.get("owgr"),
             "form_score":   r.get("form_score"),
             "avg_l5":       r.get("avg_l5"),
             "avg_l3":       r.get("avg_l3"),
@@ -272,11 +312,11 @@ if __name__ == "__main__":
     ranked = sorted([r for r in rows if r.get("form_score") is not None],
                     key=lambda r: -r["form_score"])
     print(f"{len(rows)} players fetched\n")
-    print(f"{'player':22}{'form':>6}{'L5':>6}{'cut%':>6}{'scAvg':>7}{'GIR%':>6}{'drive':>7}{'p/gir':>7}")
+    print(f"{'player':22}{'OWGR':>6}{'form':>6}{'L5':>6}{'cut%':>6}{'scAvg':>7}{'GIR%':>6}{'drive':>7}{'p/gir':>7}")
     for r in ranked[:20]:
         sk = r.get("skills", {})
         v = lambda key: (sk.get(key) or {}).get("value")
-        print(f"{r['name'][:22]:22}{str(r.get('form_score') or '-'):>6}"
+        print(f"{r['name'][:22]:22}{str(r.get('owgr') or '-'):>6}{str(r.get('form_score') or '-'):>6}"
               f"{str(r.get('avg_l5') or '-'):>6}"
               f"{str(r.get('made_cut_pct') or '-'):>6}"
               f"{str(r.get('scoring_avg') or '-'):>7}"

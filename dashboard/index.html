@@ -255,6 +255,10 @@
   .sg-cell b    { color: var(--text); font-weight: 600; }
   .form-none    { color: var(--border); }
 
+  /* OWGR — world ranking, the headline signal */
+  th.owgr-col   { background: rgba(88,166,255,.12); color: var(--blue); }
+  .owgr-cell    { background: rgba(88,166,255,.08); color: var(--blue); font-weight: 700; font-variant-numeric: tabular-nums; }
+
   /* season skill-stat columns (driving / GIR / putting / …) */
   th.skill-col  { background: rgba(210,153,34,.06); }
   .skill-cell   { font-variant-numeric: tabular-nums; color: var(--text); }
@@ -437,10 +441,13 @@
           <th data-col="roundVal"    data-arrow="↑" title="Current round">Rd</th>
           <th data-col="thruVal"     data-arrow="↑" title="Holes played this round">Thru</th>
           <th data-col="scoreVal"    data-arrow="↑" title="Score to par">Score</th>
-          <th data-col="kPriceVal"   data-arrow="↑" class="k-price"    title="Kalshi price — (bid+ask)/2">K Price</th>
-          <th data-col="polyPriceVal" data-arrow="↑" class="poly-price" title="Polymarket price — mid when spread ≤10¢, else last trade">P Price</th>
           <th data-col="truePriceVal" data-arrow="↑" class="true-price" title="Blended consensus — K and P weighted by update rate">True</th>
           <th data-col="formScoreVal" data-arrow="↑" class="form-col" title="Recent-form score: z vs the field (avg-L5 finish + scoring avg). Higher = hotter.">Form</th>
+          <th>Speed</th>
+          <th>5m Trend</th>
+          <th data-col="owgrVal"     data-arrow="↑" class="owgr-col" title="Official World Golf Ranking (owgr.com; lower = better)">OWGR</th>
+          <th data-col="kPriceVal"   data-arrow="↑" class="k-price"    title="Kalshi price — (bid+ask)/2">K Price</th>
+          <th data-col="polyPriceVal" data-arrow="↑" class="poly-price" title="Polymarket price — mid when spread ≤10¢, else last trade">P Price</th>
           <th data-col="last1Val"    data-arrow="↑" title="Most recent tournament finish">L1</th>
           <th data-col="avgL3Val"    data-arrow="↑" title="Avg finish, last 3 starts (lower = better)">L3</th>
           <th data-col="avgL5Val"    data-arrow="↑" title="Avg finish, last 5 starts (lower = better)">L5</th>
@@ -454,13 +461,11 @@
           <th data-col="sandVal"     data-arrow="↑" class="skill-col" title="Sand save % (season; higher = better)">Sand</th>
           <th data-col="volume"      data-arrow="↑" class="col-k">K Vol</th>
           <th data-col="poly_volume" data-arrow="↑" class="col-p">P Vol</th>
-          <th>Speed</th>
           <th data-col="arbNet"      data-arrow="↑">Arb</th>
-          <th>5m Trend</th>
         </tr>
       </thead>
       <tbody id="marketTbody">
-        <tr><td colspan="25" class="empty">Waiting for data…</td></tr>
+        <tr><td colspan="26" class="empty">Waiting for data…</td></tr>
       </tbody>
     </table>
   </div>
@@ -525,6 +530,7 @@ function recomputeSortKeys() {
     m.scoreVal     = parseScore(m.score);
     m.roundVal     = m.round && m.round !== '—' ? +String(m.round).replace('R', '') : 0;
     m.thruVal      = m.thru === 'F' ? 18 : (+m.thru || 0);
+    m.owgrVal      = (m.form && m.form.owgr) ?? 9999;   // lower = better world rank
     const a = bestArb(m);
     m.arbNet       = a ? a.net : -1;
     m.kPriceVal    = kPrice(m)    ?? -1;
@@ -787,6 +793,7 @@ function formClass(z) {
 function fmtForm(z)   { return z == null ? '—' : (z > 0 ? '+' : '') + z.toFixed(2); }
 function fmtFinish(v) { return v == null ? '—' : (Number.isInteger(v) ? v : v.toFixed(1)); }
 function fmtPct(v)    { return v == null ? '—' : `${Math.round(v)}%`; }
+function fmtOwgr(r)   { return r == null ? '—' : `#${r}`; }
 
 // season skill stat accessors: value + PGA-Tour rank
 function skv(m, key) { return (m.form && m.form.skills && m.form.skills[key] || {}).value ?? null; }
@@ -820,7 +827,7 @@ function renderTable() {
   const tbody = document.getElementById('marketTbody');
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="25" class="empty">No markets match the filter.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="26" class="empty">No markets match the filter.</td></tr>`;
     document.getElementById('filterCount').textContent = '';
     return;
   }
@@ -850,10 +857,16 @@ function rowHTML(m) {
       <td class="rd-cell">${m.round || '—'}</td>
       <td class="thru-cell">${m.thru || '—'}</td>
       <td class="score-cell ${scoreClass}">${m.score || '—'}</td>
-      <td class="k-price ${kConfClass(m)}${bv === 'k' ? ' best-ask' : ''}" id="kprice-${m.ticker}">${fmtPrice(kPrice(m))}</td>
-      <td class="poly-price ${pConfClass(m)}${bv === 'p' ? ' best-ask' : ''}" id="pprice-${m.ticker}">${fmtPrice(polyPrice(m))}</td>
       <td class="true-price" id="trueprice-${m.ticker}">${fmtPrice(truePrice(m))}</td>
       <td class="form-cell ${formClass(f.form_score)}" id="form-${m.ticker}">${fmtForm(f.form_score)}</td>
+      <td class="speed-cell">
+        <div class="kp-row"><span class="kp-tag k">K</span><span class="fdot fresh-none" id="kdot-${m.ticker}">●</span><span class="rate" id="krate-${m.ticker}">—</span></div>
+        <div class="kp-row"><span class="kp-tag p">P</span><span class="fdot fresh-none" id="pdot-${m.ticker}">●</span><span class="rate" id="prate-${m.ticker}">—</span></div>
+      </td>
+      <td class="spark"    id="spark-${m.ticker}">${sparkSVG(tickHistory[m.ticker] || [])}</td>
+      <td class="owgr-cell" id="owgr-${m.ticker}">${fmtOwgr(f.owgr)}</td>
+      <td class="k-price ${kConfClass(m)}${bv === 'k' ? ' best-ask' : ''}" id="kprice-${m.ticker}">${fmtPrice(kPrice(m))}</td>
+      <td class="poly-price ${pConfClass(m)}${bv === 'p' ? ' best-ask' : ''}" id="pprice-${m.ticker}">${fmtPrice(polyPrice(m))}</td>
       <td class="form-num">${fmtFinish(f.last1)}</td>
       <td class="form-num">${fmtFinish(f.avg_l3)}</td>
       <td class="form-num">${fmtFinish(f.avg_l5)}</td>
@@ -867,12 +880,7 @@ function rowHTML(m) {
       <td class="skill-cell">${skillCell(m, 'sand_save', 0, '%')}</td>
       <td class="vol-cell"   id="vol-${m.ticker}">${fmtVol(m.volume)}</td>
       <td class="vol-cell"   id="pvol-${m.ticker}">${fmtUsd(m.poly_volume)}</td>
-      <td class="speed-cell">
-        <div class="kp-row"><span class="kp-tag k">K</span><span class="fdot fresh-none" id="kdot-${m.ticker}">●</span><span class="rate" id="krate-${m.ticker}">—</span></div>
-        <div class="kp-row"><span class="kp-tag p">P</span><span class="fdot fresh-none" id="pdot-${m.ticker}">●</span><span class="rate" id="prate-${m.ticker}">—</span></div>
-      </td>
       <td class="arb-cell" id="arb-${m.ticker}">—</td>
-      <td class="spark"    id="spark-${m.ticker}">${sparkSVG(tickHistory[m.ticker] || [])}</td>
     </tr>`;
 }
 
@@ -1003,6 +1011,7 @@ function updateDetailForm(m) {
       <span style="float:right" class="${formClass(f.form_score)}">${fmtForm(f.form_score)} z</span>
     </div>
     <div class="df-grid">
+      <div class="df-row"><span>World rank</span><b style="color:var(--blue)">${fmtOwgr(f.owgr)}</b></div>
       <div class="df-row"><span>Last finish</span><b>${fmtFinish(f.last1)}</b></div>
       <div class="df-row"><span>Avg L3</span><b>${fmtFinish(f.avg_l3)}</b></div>
       <div class="df-row"><span>Avg L5</span><b>${fmtFinish(f.avg_l5)}</b></div>
