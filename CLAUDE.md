@@ -45,7 +45,7 @@ Update this constant in `feed.py` when moving to a new tournament.
 - **Code 25 (buffer overflow)** is caught and triggers an immediate reconnect.
 
 ## Things to be careful about
-- Kalshi WS ticker fields use `yes_bid_dollars` / `yes_ask_dollars` (dollar suffix). REST API uses `yes_bid` / `yes_ask`. Both are 0–1 floats. Always cast to `float()` when storing — the REST API can return strings.
+- Kalshi uses the `_dollars` suffix on **both** the WS ticker AND the REST `/markets` response: `yes_bid_dollars` / `yes_ask_dollars` (and `volume_fp` for volume). The plain `yes_bid` / `yes_ask` come back **null** from REST — do not rely on them. All are 0–1 floats; cast to `float()` when storing (values can be strings). *(This corrected an earlier wrong note that claimed REST used the plain names; `feed.refresh_markets_loop` was seeding bid/ask = 0 until the first WS tick.)*
 - The `broadcast_clients` set is mutated during iteration in `_broadcast`. Dead clients are collected into a `dead` set and removed after iteration — do not change this pattern.
 - `feed.markets` is a plain dict (not thread-safe), but this is fine since everything runs in a single asyncio event loop.
 - Do not run `renderTable()` on every incoming WS tick — it re-renders the full DOM. Use targeted cell updates (`updateRow`) for live ticks and only call `renderTable()` on filter/sort changes.

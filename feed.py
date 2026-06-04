@@ -79,13 +79,16 @@ async def refresh_markets_loop():
         try:
             for m in _fetch_markets():
                 if m["ticker"] not in markets:
+                    # Kalshi REST returns yes_bid_dollars / yes_ask_dollars (0-1);
+                    # the plain yes_bid / yes_ask come back null. Prefer the
+                    # _dollars fields, fall back to the plain names just in case.
                     markets[m["ticker"]] = {
                         "ticker":       m["ticker"],
                         "title":        m["title"],
                         "player":       _player_name(m["title"]),
                         "event_ticker": m["event_ticker"],
-                        "yes_bid":      float(m.get("yes_bid") or 0),
-                        "yes_ask":      float(m.get("yes_ask") or 0),
+                        "yes_bid":      float(m.get("yes_bid_dollars") or m.get("yes_bid") or 0),
+                        "yes_ask":      float(m.get("yes_ask_dollars") or m.get("yes_ask") or 0),
                     }
             db.upsert_markets(list(markets.values()))
             print(f"[feed] {len(markets)} markets loaded")

@@ -41,7 +41,13 @@ Work through these sequentially. Each phase builds on the last.
 > 4. Land it behind something we can toggle off, so a Polymarket outage can't take down the Kalshi dashboard.
 > Work through it together, one verified step at a time.
 
-- [ ] **Research Polymarket API** — Polymarket uses a CLOB (Central Limit Order Book). Find their WebSocket or polling endpoint for golf markets. Their API docs: https://docs.polymarket.com *(First deliverable: a standalone script that pulls and prints PGA market prices — no app integration yet.)*
+- [x] **Research Polymarket API** — DONE via `polymarket_probe.py` (standalone, no app integration). Findings:
+  - **Gamma API** (`https://gamma-api.polymarket.com`) gives everything we need for prices without the CLOB: `GET /events?slug=<slug>` returns the event with nested `markets[]`, each carrying `question`, `bestBid`, `bestAsk`, `outcomePrices` (JSON-string `["yes","no"]`), `volume`, and `clobTokenIds` (for later WS).
+  - Memorial event slug: **`2026-the-memorial-tournament-presented-by-workday-winner`** (93 player markets, ~$75k volume). Same "Will X win" question format as Kalshi → identical name extraction.
+  - `public-search?q=<term>` is the discovery endpoint for finding event slugs.
+  - **Coverage: 71/72 real Kalshi players matched** (reusing `leaderboard.py` normalize + fuzzy). The 22 "unmatched" Polymarket entries are placeholders ("Player 0-19", "Any Other Player") + Jake Knapp (Polymarket-only). Kalshi-only: Sudarshan Yellamaraju.
+  - ⚠️ **Bug found:** Kalshi REST `/markets` returns `yes_bid_dollars`/`yes_ask_dollars`/`volume_fp` — NOT plain `yes_bid`/`yes_ask` (those are null). So `feed.refresh_markets_loop` currently seeds bid/ask = 0 until the first WS tick. Live dashboard is unaffected (WS corrects it fast) but the REST seed is wrong. CLAUDE.md's note is outdated. **Decide whether to fix feed.py.**
+  - Note for the detector: real arb compares one book's ASK vs the other's BID (with fees), NOT mid-vs-mid. Polymarket spreads are very wide on thin markets, so mids are misleading.
 
 - [ ] **Build polymarket_feed.py** — Mirror the structure of `feed.py`. Connect to Polymarket's feed, subscribe to PGA Tour markets, store prices in a `poly_ticks` SQLite table. *(Test standalone first: confirm prices stream and persist correctly before touching the server.)*
 
