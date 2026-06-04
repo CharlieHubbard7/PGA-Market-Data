@@ -103,7 +103,15 @@ Work through these sequentially. Each phase builds on the last.
 
 Charlie's goal: get every data source flowing and presented well. Descriptive/real-time only — **no predictive model now** (that's deferred, see Phase 5). **Decided: do this phase BEFORE 3.6.** Suggested build order within the phase: (1) capture `last_trade_price` + single-price column, (2) best-odds highlight, (3) detail-chart fix, (4) volume-units fix.
 
-- [x] **Polymarket single "price" column (highlighted)** — DONE. New highlighted purple **"P Price"** column = live midpoint `(poly_bid+poly_ask)/2`, falling back to last trade / Gamma price. Sortable, flashes green/red on change. Verified live.
+- [x] **Polymarket single "price" column (highlighted)** — DONE + VERIFIED against the app. P Price = midpoint of Polymarket's authoritative best bid/ask, which **equals Polymarket's own published mark (`outcomePrices`)** — confirmed simultaneously against Gamma (Tommy 10.4, Rory 7.3, Poston 1.6, even no-bid longshots like Campbell at 8¢ all matched). Flash removed (distracting). 🔬 **Detour logged:** tried a size-weighted microprice + local order-book reconstruction — BOTH failed for these markets (microprice drags to the thin side on one-sided size walls; book recon produced phantom asks). Reverted to the `best_bid`/`best_ask` Polymarket streams directly. Lesson: for thin prediction-market books, the venue's own mark (= best-bid/ask mid) beats anything we compute. *(Occasional stale best-ask on a dead market — e.g. Echavarria — could be self-healed with a periodic Gamma reconciliation; optional.)*
+
+- [ ] **Confidence band on the price (P now, K too)** — ⭐ NEXT. Color/grey the price by spread width (the anti-swindle signal): tight spread = trust it; wide = low confidence (e.g. Campbell's 8¢ with no bid + 16¢ ask is a mirage). Charlie picked option #3. Apply to both venues.
+
+- [ ] **K Price column (midpoint)** — one accurate Kalshi number = `(yes_bid+yes_ask)/2`. Kalshi books are tight so mid ≈ the app. (Size-weighted upgrade via orderbook_delta deferred.)
+
+- [ ] **Blended "True" price column** — combine K Price + P Price weighted by recent activity (updates/min + recent volume) → cross-venue consensus. Comparing each venue to it = the "who's mispricing this player" signal + model verification.
+
+- [ ] **Collapse table to K Price · P Price · True** — drop the four bid/ask columns from the table (Charlie doesn't want to stare at them); move bid/ask to the detail panel.
 
 - [x] **Capture `last_trade_price` (Polymarket)** — DONE. `polymarket_feed._on_message` now handles `last_trade_price` events → updates `yes_last` and broadcasts, so the number ticks on trades (not just book moves) and the Speed tracker counts trades too. `yes_last` + `yes_mid` now flow through `_emit`/broadcast/snapshot/`/api/markets`/`/api/poly`. Verified: 29/65 poly broadcasts carried `poly_last` in 14s. ⚠️ Reality check confirmed: both feeds were ALREADY real-time WS — no polling bottleneck; this just surfaces the trade-frequency number. *(Kalshi last-trade capture not done yet — Kalshi already has its own bid/ask flashes; revisit if we want a Kalshi single-price too.)*
 
