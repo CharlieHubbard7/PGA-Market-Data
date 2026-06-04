@@ -4,6 +4,21 @@ Work through these sequentially. Each phase builds on the last.
 
 ---
 
+## 📍 Current Status (2026-06-04)
+
+**Live in the running app (`server.py`):** Kalshi WS feed + ESPN leaderboard → dashboard. Working, verified.
+
+**Built + tested standalone, NOT yet wired into the app:**
+- `polymarket_feed.py` — real-time Polymarket prices via CLOB market-channel WebSocket (no auth; read-only). Discovery via Gamma REST.
+- `arbitrage.py` — cross-exchange arb math, 10/10 self-tests pass. Assumptions documented in its module docstring.
+- `polymarket_probe.py` — research/coverage script.
+
+**Decided:** 71/72 player mapping proven (reuses `leaderboard.py` matching). Polymarket needs no auth/keys for market data — and we deliberately don't use any (keeps the project un-tradeable). Real-time WS ≈ Kalshi (event-driven, sub-second); no meaningful lag.
+
+**The gate before integration:** the arb premise rests on *assumption #1 — Kalshi and Polymarket resolving "win" identically* (playoffs, ties, WDs). Verify that before showing arb numbers as real. See `arbitrage.py` docstring for the full assumptions list.
+
+---
+
 ## Phase 1 — Bug Fixes (do first) ✅ DONE
 
 - [x] **Fix prob % filter** — `visibleMarkets()` now casts probability with `Number(m.probability) || 0`, so undefined/NaN values filter to 0 instead of silently passing. *(Superseded — the Prob % column and filter were later removed entirely; see Phase 2.5.)*
@@ -52,7 +67,7 @@ Work through these sequentially. Each phase builds on the last.
   - Memorial event slug: **`2026-the-memorial-tournament-presented-by-workday-winner`** (93 player markets, ~$75k volume). Same "Will X win" question format as Kalshi → identical name extraction.
   - `public-search?q=<term>` is the discovery endpoint for finding event slugs.
   - **Coverage: 71/72 real Kalshi players matched** (reusing `leaderboard.py` normalize + fuzzy). The 22 "unmatched" Polymarket entries are placeholders ("Player 0-19", "Any Other Player") + Jake Knapp (Polymarket-only). Kalshi-only: Sudarshan Yellamaraju.
-  - ⚠️ **Bug found:** Kalshi REST `/markets` returns `yes_bid_dollars`/`yes_ask_dollars`/`volume_fp` — NOT plain `yes_bid`/`yes_ask` (those are null). So `feed.refresh_markets_loop` currently seeds bid/ask = 0 until the first WS tick. Live dashboard is unaffected (WS corrects it fast) but the REST seed is wrong. CLAUDE.md's note is outdated. **Decide whether to fix feed.py.**
+  - ✅ **Bug found & FIXED:** Kalshi REST `/markets` returns `yes_bid_dollars`/`yes_ask_dollars`/`volume_fp` — NOT plain `yes_bid`/`yes_ask` (those are null). `feed.refresh_markets_loop` was seeding bid/ask = 0 until the first WS tick; now reads the `_dollars` fields. CLAUDE.md note corrected.
   - Note for the detector: real arb compares one book's ASK vs the other's BID (with fees), NOT mid-vs-mid. Polymarket spreads are very wide on thin markets, so mids are misleading.
 
 - [x] **Build polymarket_feed.py** — DONE, standalone (NOT yet imported by server.py). **Now real-time via WebSocket** (upgraded from the 30s polling stopgap). Mirrors feed.py's two-task design:
@@ -62,7 +77,7 @@ Work through these sequentially. Each phase builds on the last.
   - Verified: WS connects, subscribes to 72 tokens, wrote 182 ticks across 60 markets in ~18s (vs 1 poll/30s before). Snapshot mode (`python3 polymarket_feed.py`) still works so arbitrage.py is unaffected.
   - 30s polling was MY choice, never a Polymarket limit (their REST limits are generous: Gamma /events 500/10s, CLOB /book 1500/10s). **Next: wire both tasks into server.py lifespan — only after arb assumptions (#1 resolution rules, #4 staleness) are addressed.**
 
-- [ ] **Map Kalshi ↔ Polymarket markets** — Build a mapping (JSON or DB table) pairing equivalent markets across exchanges. Hardest part — names and structures differ. **Reuse the proven matching approach from `leaderboard.py`** (normalize + fuzzy fallback) and produce a coverage report (X/Y markets matched) before relying on it.
+- [x] **Map Kalshi ↔ Polymarket markets** — DONE by reusing `leaderboard.py` normalize + fuzzy matching (no separate mapping table needed — both use the "Will X win" format). Coverage proven: 71/72 real players (probe), 67 quotable-on-both (arb scan). Remaining mismatches are Polymarket-only (Jake Knapp) / Kalshi-only (Sudarshan Yellamaraju) / scaffolding markets.
 
 - [ ] **Combined columns layout (Charlie's design)** — Do NOT add separate standalone Polymarket columns. Instead, group the two exchanges side by side under each metric so they're directly comparable:
   - **Bid:** Kalshi bid and Polymarket bid together (labeled K / P)
@@ -70,9 +85,13 @@ Work through these sequentially. Each phase builds on the last.
   - **Volume:** Kalshi volume and Polymarket volume together (labeled K / P)
   - Likely a two-line cell or `K: __ / P: __` sub-layout per column. The point is at-a-glance cross-exchange comparison on the same row.
 
-- [~] **Arbitrage detector** — MATH DONE + TESTED in `arbitrage.py` (standalone). Pure `best_arb()` compares both directions (arb exists when one venue's BID > other's ASK), nets out fees, returns the better. 10/10 self-tests pass (`python3 arbitrage.py --test`) — caught a real float-rounding bug in the Kalshi fee. Live scan (`python3 arbitrage.py`) joins 67 matched markets and flags net-positive edges; on current data the best is sub-cent (no meaningful free money — as expected for a liquid favorite market). **Still TODO:** push `type: "arb_alert"` to the dashboard (deferred until the feed is wired into server.py). See the assumptions list in this session's notes / docstring.
+- [x] **Arbitrage detector (math)** — DONE + TESTED in `arbitrage.py` (standalone). Pure `best_arb()` compares both directions (arb exists when one venue's BID > other's ASK), nets out fees, returns the better. 10/10 self-tests pass (`python3 arbitrage.py --test`) — caught a real float-rounding bug in the Kalshi fee. Live scan (`python3 arbitrage.py`) joins 67 matched markets and flags net-positive edges; on current data the best is sub-cent (no meaningful free money — expected for a liquid favorite market). **Full assumptions list now lives in the `arbitrage.py` module docstring.**
 
-- [ ] **Arbitrage column in dashboard** — Add an "Arb" indicator column to the table. Highlight rows where a cross-exchange opportunity exists.
+- [ ] **🚧 GATE: Verify resolution-rule equivalence (assumption #1)** — Before any arb number is shown as "real," confirm Kalshi and Polymarket resolve "Will X win the Memorial?" identically: playoffs, ties/dead-heats, withdrawals, DQs. Diff Kalshi's market rules against Polymarket's `description`/`resolutionSource`. If they differ, an "edge" may be a rules artifact, not free money. Cheap to check, high information — do this before the dashboard arb column.
+
+- [ ] **Wire Polymarket into server.py** — Add `refresh_poly_markets_loop()` + `run_poly_feed()` to the lifespan, **fault-isolated** (a Polymarket WS failure must NOT take down the Kalshi feed — wrap the tasks / guard the loops). Expose poly bid/ask to the dashboard (init snapshot + a `type:"poly"` broadcast keyed by Kalshi ticker via the existing name match).
+
+- [ ] **Combined K/P columns + Arb column in dashboard** — Implement Charlie's combined-column design (see above): Bid K/P, Ask K/P, Volume K/P side-by-side, plus an "Arb" indicator highlighting net-positive rows. Label clearly as informational until the resolution-rule gate passes.
 
 ---
 

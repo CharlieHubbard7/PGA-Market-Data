@@ -23,10 +23,16 @@ Kalshi WS  ──►  feed.py  ──►  db.py (SQLite: kalshi_data.db)
 
 - **feed.py** — owns the Kalshi WebSocket connection, all shared state (`markets`, `ticks`, `trade_counts`, `broadcast_clients`), and all DB writes. Two async tasks: `refresh_markets_loop` (REST poll every 10 min) and `run_feed` (WS listener).
 - **leaderboard.py** — polls ESPN's public golf scoreboard every 60s (`refresh_leaderboard_loop`), parses position/score/thru, and joins each player to a Kalshi market. Matching (`match()`) is exact-normalized-name first, then a last-name + first-initial fuzzy fallback; `normalize_name` transliterates special letters (Højgaard → hojgaard). Annotates `feed.markets` in place with `pos`/`score`/`thru` and broadcasts a per-ticker map (`type: "leaderboard"`). The browser never re-matches names — it just applies what the server sends.
-- **db.py** — thin SQLite helpers. Writes are synchronous and called directly from async code (safe at PGA data rates). DB file: `kalshi_data.db`. Tables: `markets`, `ticks`, `trades`, `leaderboard`.
+- **db.py** — thin SQLite helpers. Writes are synchronous and called directly from async code (safe at PGA data rates). DB file: `kalshi_data.db`. Tables: `markets`, `ticks`, `trades`, `leaderboard`, `poly_markets`, `poly_ticks`.
 - **server.py** — FastAPI app. Starts feed + leaderboard tasks in `lifespan`. Exposes `/`, `/api/markets`, `/api/history/{ticker}`, `/api/leaderboard`, `/ws`.
 - **config.py** — loads `.env` (API key) and `kalshi_private_key.pem` (RSA private key for WS auth).
 - **dashboard/index.html** — single-file frontend. Connects to `/ws`, maintains its own in-browser tick history, renders table with flash animations, sparklines, detail panel with Chart.js chart and trade feed.
+
+### Polymarket pieces (Phase 3 — built + tested STANDALONE, NOT yet imported by server.py)
+- **polymarket_feed.py** — real-time Polymarket prices for the same tournament. Mirrors feed.py: `refresh_poly_markets_loop` (Gamma REST every 10 min, discovery/seed only) + `run_poly_feed` (CLOB market-channel WebSocket, `wss://ws-subscriptions-clob.polymarket.com/ws/market`, **no auth**). Subscribes by YES token id, sends `"PING"` every 10s, writes a `poly_ticks` row only when best bid/ask moves. **We intentionally use NO Polymarket auth/keys — market data is public and this keeps the project un-tradeable.**
+- **arbitrage.py** — cross-exchange arb math. Pure `best_arb()` (arb when one venue's BID > the other's ASK, net of fees), `--test` self-tests, `--live` scan. Full assumptions list in its module docstring; assumption #1 (resolution-rule equivalence) is the gate before trusting any edge.
+- **polymarket_probe.py** — one-shot research/coverage script (Kalshi↔Polymarket price + name-match report).
+- Matching across exchanges reuses `leaderboard.py`'s `normalize_name` + fuzzy fallback (both venues phrase markets as "Will X win …").
 
 ## Credentials
 - `.env` — `KALSHI_API_KEY` and `KALSHI_PRIVATE_KEY_PATH`
@@ -51,4 +57,4 @@ Update this constant in `feed.py` when moving to a new tournament.
 - Do not run `renderTable()` on every incoming WS tick — it re-renders the full DOM. Use targeted cell updates (`updateRow`) for live ticks and only call `renderTable()` on filter/sort changes.
 
 ## Archive
-`archive/` contains the original standalone scripts (`market_data.py`, `realtime_feed.py`) kept for reference.
+`archive/` contains original standalone scripts kept for reference (`market_data.py`, `realtime_feed.py`, `market_data_poly.py` — note the last is early Kalshi exploration despite the name, not Polymarket).

@@ -24,6 +24,32 @@ A risk-free position pays exactly $1 while costing < $1:
 So: an arb exists when one venue's BID > the other venue's ASK. We take the
 better of the two directions, net of fees.
 ────────────────────────────────────────────────────────────────────────────
+ASSUMPTIONS (each one is a way the "risk-free" edge could be wrong):
+
+  Market equivalence
+    1. SAME outcome + SAME resolution rules across venues — identical handling
+       of playoffs, ties/dead-heats, withdrawals, DQs. *Biggest unverified one.*
+       (Next concrete task: diff Kalshi rules vs Polymarket `description`.)
+    2. Name match == market match (67 paired via leaderboard.py fuzzy logic).
+
+  Pricing & execution
+    3. Top-of-book only — edge holds only for size at the best level; we have
+       NO depth on the Polymarket side (Gamma gives just best bid/ask).
+    4. Prices contemporaneous — both feeds are now real-time WebSockets, so
+       staleness is sub-second (was up to 30s under the old polling feed).
+    5. Both legs fill at the quoted price, simultaneously, no slippage/partials.
+    6. Buying NO == 1 − YES bid (standard binary identity).
+
+  Fees & costs
+    7. Kalshi fee = ceil(0.07·C·P·(1−P)) per order, modeled at a 100-contract
+       size (1-lots pay proportionally more due to the cent round-up). 7% rate.
+    8. Polymarket fees = 0 (historically true here; configurable via p_rate).
+    9. Ignored: Polygon gas, USDC↔USD peg (assumed 1:1), capital cost to
+       resolution.
+
+  Scope
+    10. Only the "Winner" market is compared (Top-5/10/20 are out of scope).
+────────────────────────────────────────────────────────────────────────────
 """
 
 import math
