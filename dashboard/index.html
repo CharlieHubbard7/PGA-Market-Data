@@ -183,6 +183,23 @@
   .kp-tag.k     { color: var(--blue); }
   .kp-tag.p     { color: var(--purple); }
   .kp-row.p     { color: var(--muted); }
+
+  /* speed / freshness column */
+  .speed-cell   { font-variant-numeric: tabular-nums; line-height: 1.35; }
+  .rate         { font-size: 11px; }
+  .rate .unit   { color: var(--muted); font-size: 9px; }
+  .fdot         { font-size: 9px; line-height: 1; transition: color .2s; }
+  .fdot.fresh-green  { color: var(--green); }
+  .fdot.fresh-yellow { color: var(--yellow); }
+  .fdot.fresh-red    { color: var(--red); }
+  .fdot.fresh-none   { color: var(--border); }
+
+  /* arbitrage column */
+  .arb-cell     { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 11px; white-space: nowrap; }
+  .arb-none     { color: var(--muted); font-weight: 400; }
+  .arb-live     { color: var(--green); }
+  .arb-live-row { background: rgba(63,185,80,.10); }
+  .arb-stale    { color: var(--yellow); }     /* positive edge but a quote is stale — don't trust */
   .pos-cell     { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 500; }
   .score-cell   { font-variant-numeric: tabular-nums; font-weight: 600; }
   .score-under  { color: var(--red); }    /* under par = lower is better, shown red like golf boards */
@@ -309,14 +326,19 @@
           <th data-col="player"      data-arrow="↑">Player</th>
           <th data-col="posVal"      data-arrow="↑">Pos</th>
           <th data-col="scoreVal"    data-arrow="↑">Score</th>
-          <th data-col="yes_bid"     data-arrow="↑">Bid</th>
-          <th data-col="yes_ask"     data-arrow="↑">Ask</th>
-          <th data-col="volume"      data-arrow="↑">Volume</th>
+          <th data-col="yes_bid"     data-arrow="↑" class="col-k">K Bid</th>
+          <th data-col="poly_bid"    data-arrow="↑" class="col-p">P Bid</th>
+          <th data-col="yes_ask"     data-arrow="↑" class="col-k">K Ask</th>
+          <th data-col="poly_ask"    data-arrow="↑" class="col-p">P Ask</th>
+          <th data-col="volume"      data-arrow="↑" class="col-k">K Vol</th>
+          <th data-col="poly_volume" data-arrow="↑" class="col-p">P Vol</th>
+          <th>Speed</th>
+          <th data-col="arbNet"      data-arrow="↑">Arb</th>
           <th>5m Trend</th>
         </tr>
       </thead>
       <tbody id="marketTbody">
-        <tr><td colspan="7" class="empty">Waiting for data…</td></tr>
+        <tr><td colspan="12" class="empty">Waiting for data…</td></tr>
       </tbody>
     </table>
   </div>
@@ -354,6 +376,10 @@ const markets     = {};      // ticker -> market object (server supplies pos/sco
 const tickHistory = {};      // ticker -> [{ts, bid, ask}]
 const TICK_MAX    = 300;
 
+// Per-venue update timestamps (ms) per ticker, for live speed/freshness.
+const updTimes = { k: {}, p: {} };
+const FRESH_GREEN_S = 5, FRESH_YELLOW_S = 30, STALE_S = 30;  // thresholds (s)
+
 const parsePos   = p => { if (!p || p === '—') return 999; return +p.replace('T', '') || 999; };
 const parseScore = s => { if (!s || s === '—') return 999; if (s.toUpperCase() === 'E') return 0; return +s; };
 
@@ -362,6 +388,8 @@ function recomputeSortKeys() {
   Object.values(markets).forEach(m => {
     m.posVal   = parsePos(m.pos);
     m.scoreVal = parseScore(m.score);
+    const a = bestArb(m);
+    m.arbNet = a ? a.net : -1;   // negative sentinel so no-opp rows sort below real edges
   });
 }
 
@@ -434,7 +462,9 @@ function onTicker(msg) {
   if (hist.length > TICK_MAX) hist.shift();
 
   // update table cells (no full re-render)
+  recordUpdate('k', msg.ticker);
   updateRow(msg.ticker, prevBid);
+  updateArb(msg.ticker);
 
   // update detail panel if open
   if (selectedTicker === msg.ticker) updateDetailPrices(m);
@@ -474,6 +504,8 @@ function onPoly(msg) {
   if (pb) pb.textContent = fmtPrice(m.poly_bid);
   if (pa) pa.textContent = fmtPrice(m.poly_ask);
   if (pv) pv.textContent = fmtUsd(m.poly_volume);
+  recordUpdate('p', msg.ticker);
+  updateArb(msg.ticker);
 }
 
 // ── table rendering ───────────────────────────────────────────────────────────
@@ -487,7 +519,7 @@ function visibleMarkets() {
     const va = a[sortCol] ?? 0;
     const vb = b[sortCol] ?? 0;
     if (typeof va === 'string') return sortDir * va.localeCompare(vb);
-    return sortDir * (vb - va);
+    return sortDir * (va - vb);   // sortDir=-1 (↓) = descending, matches the string branch + the arrow
   });
 }
 
@@ -496,7 +528,7 @@ function renderTable() {
   const tbody = document.getElementById('marketTbody');
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="7" class="empty">No markets match the filter.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="12" class="empty">No markets match the filter.</td></tr>`;
     document.getElementById('filterCount').textContent = '';
     return;
   }
@@ -523,19 +555,18 @@ function rowHTML(m) {
       <td class="player-name" title="${m.title}">${m.player}</td>
       <td class="pos-cell">${m.pos || '—'}</td>
       <td class="score-cell ${scoreClass}">${scoreTxt}</td>
-      <td class="kp-cell">
-        <div class="kp-row"><span class="kp-tag k">K</span><span id="bid-${m.ticker}">${fmtPrice(m.yes_bid)}</span></div>
-        <div class="kp-row p"><span class="kp-tag p">P</span><span id="pbid-${m.ticker}">${fmtPrice(m.poly_bid)}</span></div>
+      <td class="price-cell" id="bid-${m.ticker}">${fmtPrice(m.yes_bid)}</td>
+      <td class="price-cell" id="pbid-${m.ticker}">${fmtPrice(m.poly_bid)}</td>
+      <td class="price-cell" id="ask-${m.ticker}">${fmtPrice(m.yes_ask)}</td>
+      <td class="price-cell" id="pask-${m.ticker}">${fmtPrice(m.poly_ask)}</td>
+      <td class="vol-cell"   id="vol-${m.ticker}">${fmtVol(m.volume)}</td>
+      <td class="vol-cell"   id="pvol-${m.ticker}">${fmtUsd(m.poly_volume)}</td>
+      <td class="speed-cell">
+        <div class="kp-row"><span class="kp-tag k">K</span><span class="fdot fresh-none" id="kdot-${m.ticker}">●</span><span class="rate" id="krate-${m.ticker}">—</span></div>
+        <div class="kp-row"><span class="kp-tag p">P</span><span class="fdot fresh-none" id="pdot-${m.ticker}">●</span><span class="rate" id="prate-${m.ticker}">—</span></div>
       </td>
-      <td class="kp-cell">
-        <div class="kp-row"><span class="kp-tag k">K</span><span id="ask-${m.ticker}">${fmtPrice(m.yes_ask)}</span></div>
-        <div class="kp-row p"><span class="kp-tag p">P</span><span id="pask-${m.ticker}">${fmtPrice(m.poly_ask)}</span></div>
-      </td>
-      <td class="kp-cell vol-cell">
-        <div class="kp-row"><span class="kp-tag k">K</span><span id="vol-${m.ticker}">${fmtVol(m.volume)}</span></div>
-        <div class="kp-row p"><span class="kp-tag p">P</span><span id="pvol-${m.ticker}">${fmtUsd(m.poly_volume)}</span></div>
-      </td>
-      <td class="spark"     id="spark-${m.ticker}">${sparkSVG(tickHistory[m.ticker] || [])}</td>
+      <td class="arb-cell" id="arb-${m.ticker}">—</td>
+      <td class="spark"    id="spark-${m.ticker}">${sparkSVG(tickHistory[m.ticker] || [])}</td>
     </tr>`;
 }
 
@@ -751,10 +782,90 @@ const fmtVol   = v => v ? v.toLocaleString() : '0';
 // Polymarket volume is cumulative USD (different unit than Kalshi's contract count).
 const fmtUsd   = v => v == null ? '—' : v >= 1000 ? `$${(v/1000).toFixed(1)}k` : `$${Math.round(v)}`;
 
+// ── speed / freshness ─────────────────────────────────────────────────────────
+function recordUpdate(venue, ticker) {
+  const now = Date.now();
+  const arr = (updTimes[venue][ticker] ||= []);
+  arr.push(now);
+  const cut = now - 60000;
+  while (arr.length && arr[0] < cut) arr.shift();
+}
+function ageSec(venue, ticker) {
+  const arr = updTimes[venue][ticker];
+  if (!arr || !arr.length) return Infinity;
+  return (Date.now() - arr[arr.length - 1]) / 1000;
+}
+function rateMin(venue, ticker) {
+  const arr = updTimes[venue][ticker];
+  if (!arr) return 0;
+  const cut = Date.now() - 60000;
+  while (arr.length && arr[0] < cut) arr.shift();   // trim so rate decays over time
+  return arr.length;
+}
+function freshClass(age) {
+  if (age === Infinity) return 'fresh-none';
+  if (age < FRESH_GREEN_S)  return 'fresh-green';
+  if (age < FRESH_YELLOW_S) return 'fresh-yellow';
+  return 'fresh-red';
+}
+function isStale(venue, ticker) { return ageSec(venue, ticker) > STALE_S; }
+
+// Repaint freshness dots + rates every second so they decay even with no new messages.
+function paintSpeed() {
+  for (const ticker of Object.keys(markets)) {
+    for (const v of ['k', 'p']) {
+      const dot = document.getElementById(`${v}dot-${ticker}`);
+      const rt  = document.getElementById(`${v}rate-${ticker}`);
+      if (!dot && !rt) continue;
+      const r = rateMin(v, ticker);
+      if (dot) dot.className = `fdot ${freshClass(ageSec(v, ticker))}`;
+      if (rt)  rt.innerHTML = r ? `${r}<span class="unit">/m</span>` : '—';
+    }
+    updateArb(ticker);   // refresh staleness flag on the arb cell over time
+  }
+}
+
+// ── arbitrage (JS port of arbitrage.best_arb — keep in sync) ─────────────────────
+function kalshiFee(price, contracts = 100, rate = 0.07) {
+  if (price == null || price <= 0 || price >= 1) return 0;
+  const cents = Math.ceil(Math.round(rate * contracts * price * (1 - price) * 100 * 1e6) / 1e6);
+  return (cents / 100) / contracts;
+}
+function bestArb(m) {
+  const q = v => v != null && v > 0 && v < 1;
+  const opps = [];
+  if (q(m.yes_ask) && q(m.poly_bid))           // buy K @ask, sell P @bid
+    opps.push({ net: (m.poly_bid - m.yes_ask) - kalshiFee(m.yes_ask), dir: 'K→P' });
+  if (q(m.poly_ask) && q(m.yes_bid))           // buy P @ask, sell K @bid
+    opps.push({ net: (m.yes_bid - m.poly_ask) - kalshiFee(m.yes_bid), dir: 'P→K' });
+  if (!opps.length) return null;
+  return opps.reduce((a, b) => (b.net > a.net ? b : a));
+}
+function updateArb(ticker) {
+  const m = markets[ticker]; if (!m) return;
+  const el = document.getElementById(`arb-${ticker}`); if (!el) return;
+  const a = bestArb(m);
+  m.arbNet = a ? a.net : -1;
+  const tr = el.closest('tr');
+  if (tr) tr.classList.remove('arb-live-row');
+  if (!a) { el.textContent = '—'; el.className = 'arb-cell arb-none'; return; }
+  const cents = (a.net * 100).toFixed(1);
+  if (a.net > 0) {
+    const stale = isStale('k', ticker) || isStale('p', ticker);
+    el.textContent = `${a.dir} +${cents}¢${stale ? ' ⚠' : ''}`;
+    el.className = `arb-cell ${stale ? 'arb-stale' : 'arb-live'}`;
+    if (tr && !stale) tr.classList.add('arb-live-row');
+  } else {
+    el.textContent = `${cents}¢`;
+    el.className = 'arb-cell arb-none';
+  }
+}
+
 // ── init ──────────────────────────────────────────────────────────────────────
 // mark default sort header
 document.querySelector('th[data-col="yes_bid"]').classList.add('sorted');
 document.querySelector('th[data-col="yes_bid"]').dataset.arrow = '↓';
+setInterval(paintSpeed, 1000);
 connect();
 </script>
 </body>

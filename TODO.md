@@ -6,10 +6,12 @@ Work through these sequentially. Each phase builds on the last.
 
 ## 📍 Current Status (2026-06-04)
 
-**Live in the running app (`server.py`):** Kalshi WS feed + ESPN leaderboard + **Polymarket WS feed** → dashboard. The table now shows combined **K/P bid/ask/volume** columns, live. All verified; Kalshi unaffected. Polymarket is behind a `POLY_ENABLED` flag in server.py.
+**Live in the running app (`server.py`):** Kalshi WS feed + ESPN leaderboard + **Polymarket WS feed** → dashboard. The table now has **separate K/P columns** (K Bid, P Bid, K Ask, P Ask, K Vol, P Vol), a **Speed** column (per-venue freshness dot + updates/min), and a freshness-aware **Arb** column. All verified; Kalshi unaffected. Polymarket behind a `POLY_ENABLED` flag.
 
-**Built + tested standalone (not wired):**
-- `arbitrage.py` — cross-exchange arb math, 10/10 self-tests pass. Assumptions in its docstring (incl. #1 resolution rules ✅ verified). Next: drive an "Arb" dashboard column from it.
+**🎉 Phase 3 is essentially complete.** Remaining polish only (see below).
+
+**Reference scripts (standalone):**
+- `arbitrage.py` — arb math, 10/10 self-tests; the dashboard has a JS port that must stay in sync. Assumptions in its docstring (#1 resolution rules ✅ verified).
 - `polymarket_probe.py` — research/coverage script.
 
 **Decided:** 71/72 player mapping proven (reuses `leaderboard.py` matching). Polymarket needs no auth/keys for market data — and we deliberately don't use any (keeps the project un-tradeable). Real-time WS ≈ Kalshi (event-driven, sub-second); no meaningful lag.
@@ -44,9 +46,9 @@ Work through these sequentially. Each phase builds on the last.
 
 ---
 
-## Known Bugs (small, fix anytime)
+## Known Bugs
 
-- [ ] **Numeric column sort direction is inverted / arrows lie** — In `visibleMarkets()` the string branch uses `sortDir * va.localeCompare(vb)` (sortDir=1 → ascending) but the numeric branch uses `sortDir * (vb - va)` (sortDir=1 → descending). Opposite polarity, so Bid/Ask/Volume/Pos/Score sort the *wrong way* relative to the sort arrow, and clicking feels inconsistent vs the Player column. **One-line fix:** change `return sortDir * (vb - va);` to `return sortDir * (va - vb);` — then sortDir=-1 (↓) = descending for both numbers and strings, and the arrows tell the truth. (Noticed by Charlie on Bid/Ask headers.)
+- [x] **Numeric column sort direction was inverted / arrows lied** — FIXED. Changed the numeric branch in `visibleMarkets()` from `sortDir * (vb - va)` to `sortDir * (va - vb)`, matching the string branch. Now sortDir=-1 (↓) = descending for both numbers and strings, and the arrows tell the truth. (Fixed while adding the new sortable K/P/Arb columns.)
 
 ---
 
@@ -90,9 +92,11 @@ Work through these sequentially. Each phase builds on the last.
 
 - [x] **Wire Polymarket into server.py** — DONE + verified. `refresh_poly_markets_loop()` + `run_poly_feed()` start in lifespan behind `POLY_ENABLED` flag (flip to False to fully disable). Fault-isolated: independent tasks + guarded loops + guarded `on_update` hook, so a Polymarket failure can't touch the Kalshi feed. Name→ticker bridge (`_rebuild_poly_map`, reuses leaderboard matching) maps poly condition_ids to Kalshi tickers; `polymarket_feed.on_update` broadcasts `type:"poly"` keyed by Kalshi ticker only when bid/ask moves. New `/api/poly` endpoint; init snapshot + `/api/markets` carry `poly_bid`/`poly_ask`/`poly_volume`. Verified: both feeds coexist (62 ticker + 71 poly broadcasts in 12s), 71/72 mapped, Kalshi unaffected.
 
-- [x] **Combined K/P columns in dashboard** — DONE. Bid / Ask / Volume are now two-line cells (K on top in blue, P below in purple), live-updated via `onPoly` (targeted DOM, no full re-render). ⚠️ **Caveat:** the Volume column mixes units — Kalshi = contract count since server start (a known limitation, see Phase 4 `count` task), Polymarket = cumulative USD ($k). Not directly comparable; revisit when Kalshi volume is fixed.
+- [x] **K/P columns in dashboard** — DONE. First built as stacked two-line cells, then (per Charlie) split into **separate columns**: K Bid | P Bid | K Ask | P Ask | K Vol | P Vol, all individually sortable, live-updated via targeted DOM. ⚠️ **Caveat:** the Volume columns mix units — Kalshi = contract count since server start (known limitation, see Phase 4 `count` task), Polymarket = cumulative USD ($k). Not directly comparable; revisit when Kalshi volume is fixed.
 
-- [ ] **Arb indicator column** — NOT STARTED (stopped here per Charlie). Add an "Arb" column driven by `arbitrage.best_arb()` on the live K/P prices, highlighting net-positive rows. Label as informational. Resolution-rule gate already passed, so the numbers are meaningful.
+- [x] **Live speed / freshness tracker** — DONE (anti-swindle). New "Speed" column: per venue (K/P) a freshness dot (green <5s, yellow <30s, red ≥30s since last update) + updates/min over a rolling 60s window. Computed client-side from the message stream; a 1s timer repaints so freshness decays even with no new messages. Markets that aren't moving show red — you can see at a glance whether a quote is live before trusting it.
+
+- [x] **Arb indicator column** — DONE. New "Arb" column driven by a JS port of `arbitrage.best_arb()` (verified to match the Python: net = gross − Kalshi fee). Shows best direction + net edge in ¢; net-positive rows highlight green. **Freshness-aware:** if either venue's quote is stale (>30s) the edge is shown amber with a ⚠ and the row is NOT highlighted — ties directly into the speed tracker so a stale quote can't masquerade as free money. Sortable by net edge. Keep the JS port in sync with `arbitrage.py`.
 
 ---
 
