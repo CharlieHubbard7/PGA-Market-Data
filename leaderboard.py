@@ -8,7 +8,7 @@ import db
 import feed
 
 ESPN_URL = "https://site.api.espn.com/apis/site/v2/sports/golf/pga/scoreboard"
-POLL_SECONDS = 60
+POLL_SECONDS = 30   # ESPN updates live scores ~continuously; 30s is a safe, responsive cadence
 
 # ── shared state (read by server.py) ───────────────────────────────────────────
 # board:   ordered list of leaderboard rows (low score first)

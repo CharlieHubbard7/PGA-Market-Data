@@ -174,10 +174,6 @@
 
   .player-name  { font-weight: 500; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
   .price-cell   { font-variant-numeric: tabular-nums; }
-  .prob-cell    { font-weight: 600; }
-  .prob-high    { color: var(--green); }
-  .prob-mid     { color: var(--yellow); }
-  .prob-low     { color: var(--muted); }
   .vol-cell     { color: var(--muted); font-variant-numeric: tabular-nums; }
   .pos-cell     { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 500; }
   .score-cell   { font-variant-numeric: tabular-nums; font-weight: 600; }
@@ -294,18 +290,6 @@
 
 <div class="filters">
   <input type="text" id="searchInput" placeholder="Search player…">
-
-  <div class="range-group">
-    <label>Min prob:</label>
-    <input type="range" id="minProb" min="0" max="100" value="0" step="0.5">
-    <span class="range-val" id="minProbVal">0%</span>
-  </div>
-  <div class="range-group">
-    <label>Max prob:</label>
-    <input type="range" id="maxProb" min="0" max="100" value="100" step="0.5">
-    <span class="range-val" id="maxProbVal">100%</span>
-  </div>
-
   <div class="filter-count" id="filterCount"></div>
 </div>
 
@@ -319,13 +303,12 @@
           <th data-col="scoreVal"    data-arrow="↑">Score</th>
           <th data-col="yes_bid"     data-arrow="↑">Bid</th>
           <th data-col="yes_ask"     data-arrow="↑">Ask</th>
-          <th data-col="probability" data-arrow="↑">Prob %</th>
           <th data-col="volume"      data-arrow="↑">Volume</th>
           <th>5m Trend</th>
         </tr>
       </thead>
       <tbody id="marketTbody">
-        <tr><td colspan="8" class="empty">Waiting for data…</td></tr>
+        <tr><td colspan="7" class="empty">Waiting for data…</td></tr>
       </tbody>
     </table>
   </div>
@@ -343,10 +326,6 @@
       <div class="detail-price-block">
         <label>Ask</label>
         <span id="detailAsk">—</span>
-      </div>
-      <div class="detail-price-block prob">
-        <label>Probability</label>
-        <span id="detailProb">—</span>
       </div>
       <div class="detail-price-block">
         <label>Volume</label>
@@ -378,8 +357,8 @@ function recomputeSortKeys() {
   });
 }
 
-let sortCol = 'probability';
-let sortDir = -1;            // -1 = desc
+let sortCol = 'yes_bid';
+let sortDir = -1;            // -1 = desc (highest bid first ≈ favorites on top)
 let selectedTicker = null;
 let detailChart = null;
 let totalTrades = 0;
@@ -439,9 +418,6 @@ function onTicker(msg) {
   const prevBid = m.yes_bid;
   m.yes_bid      = msg.yes_bid;
   m.yes_ask      = msg.yes_ask;
-  m.probability  = msg.yes_ask
-    ? +((( msg.yes_bid + msg.yes_ask) / 2) * 100).toFixed(1)
-    : +(msg.yes_bid * 100).toFixed(1);
 
   // push to in-browser history
   const hist = tickHistory[msg.ticker];
@@ -478,14 +454,10 @@ function onTrade(msg) {
 
 // ── table rendering ───────────────────────────────────────────────────────────
 function visibleMarkets() {
-  const q       = document.getElementById('searchInput').value.toLowerCase();
-  const minProb = +document.getElementById('minProb').value;
-  const maxProb = +document.getElementById('maxProb').value;
+  const q = document.getElementById('searchInput').value.toLowerCase();
 
   return Object.values(markets).filter(m => {
     if (q && !m.player.toLowerCase().includes(q)) return false;
-    const prob = Number(m.probability) || 0;   // undefined/NaN → 0, never silently passes
-    if (prob < minProb || prob > maxProb) return false;
     return true;
   }).sort((a, b) => {
     const va = a[sortCol] ?? 0;
@@ -500,7 +472,7 @@ function renderTable() {
   const tbody = document.getElementById('marketTbody');
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="8" class="empty">No markets match the filter.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="empty">No markets match the filter.</td></tr>`;
     document.getElementById('filterCount').textContent = '';
     return;
   }
@@ -519,7 +491,6 @@ function renderTable() {
 }
 
 function rowHTML(m) {
-  const probClass = m.probability >= 10 ? 'prob-high' : m.probability >= 3 ? 'prob-mid' : 'prob-low';
   const sv = m.scoreVal;
   const scoreClass = (sv == null || sv === 999) ? 'score-even' : sv < 0 ? 'score-under' : sv > 0 ? 'score-over' : 'score-even';
   const scoreTxt = (m.score && m.score !== '—' && m.thru && m.thru !== '—') ? `${m.score} <span style="color:var(--muted);font-weight:400">(${m.thru})</span>` : (m.score || '—');
@@ -530,7 +501,6 @@ function rowHTML(m) {
       <td class="score-cell ${scoreClass}">${scoreTxt}</td>
       <td class="price-cell" id="bid-${m.ticker}">${fmtPrice(m.yes_bid)}</td>
       <td class="price-cell" id="ask-${m.ticker}">${fmtPrice(m.yes_ask)}</td>
-      <td class="prob-cell ${probClass}" id="prob-${m.ticker}">${m.probability}%</td>
       <td class="vol-cell"  id="vol-${m.ticker}">${fmtVol(m.volume)}</td>
       <td class="spark"     id="spark-${m.ticker}">${sparkSVG(tickHistory[m.ticker] || [])}</td>
     </tr>`;
@@ -540,7 +510,6 @@ function updateRow(ticker, prevBid) {
   const m      = markets[ticker];
   const bidEl  = document.getElementById(`bid-${ticker}`);
   const askEl  = document.getElementById(`ask-${ticker}`);
-  const probEl = document.getElementById(`prob-${ticker}`);
   const sparkEl = document.getElementById(`spark-${ticker}`);
   if (!bidEl) return;
 
@@ -548,13 +517,11 @@ function updateRow(ticker, prevBid) {
 
   bidEl.textContent  = fmtPrice(m.yes_bid);
   askEl.textContent  = fmtPrice(m.yes_ask);
-  probEl.textContent = `${m.probability}%`;
-  probEl.className   = `prob-cell ${m.probability >= 10 ? 'prob-high' : m.probability >= 3 ? 'prob-mid' : 'prob-low'}`;
   if (sparkEl) sparkEl.innerHTML = sparkSVG(tickHistory[ticker] || []);
 
   if (dir) {
     const cls = `flash-${dir}`;
-    [bidEl, probEl].forEach(el => {
+    [bidEl].forEach(el => {
       el.classList.remove('flash-up', 'flash-down');
       void el.offsetWidth; // reflow
       el.classList.add(cls);
@@ -617,7 +584,6 @@ async function openDetail(ticker) {
 function updateDetailPrices(m) {
   document.getElementById('detailBid').textContent  = fmtPrice(m.yes_bid);
   document.getElementById('detailAsk').textContent  = fmtPrice(m.yes_ask);
-  document.getElementById('detailProb').textContent = `${m.probability}%`;
   document.getElementById('detailVol').textContent  = (m.volume || 0).toLocaleString();
 }
 
@@ -746,28 +712,14 @@ document.querySelectorAll('thead th[data-col]').forEach(th => {
 // ── filters ───────────────────────────────────────────────────────────────────
 document.getElementById('searchInput').addEventListener('input', renderTable);
 
-document.getElementById('minProb').addEventListener('input', function() {
-  document.getElementById('minProbVal').textContent = `${this.value}%`;
-  if (+this.value > +document.getElementById('maxProb').value)
-    document.getElementById('maxProb').value = this.value;
-  renderTable();
-});
-
-document.getElementById('maxProb').addEventListener('input', function() {
-  document.getElementById('maxProbVal').textContent = `${this.value}%`;
-  if (+this.value < +document.getElementById('minProb').value)
-    document.getElementById('minProb').value = this.value;
-  renderTable();
-});
-
 // ── formatters ────────────────────────────────────────────────────────────────
 const fmtPrice = v => v != null ? `${(v * 100).toFixed(1)}¢` : '—';
 const fmtVol   = v => v ? v.toLocaleString() : '0';
 
 // ── init ──────────────────────────────────────────────────────────────────────
 // mark default sort header
-document.querySelector('th[data-col="probability"]').classList.add('sorted');
-document.querySelector('th[data-col="probability"]').dataset.arrow = '↓';
+document.querySelector('th[data-col="yes_bid"]').classList.add('sorted');
+document.querySelector('th[data-col="yes_bid"]').dataset.arrow = '↓';
 connect();
 </script>
 </body>
