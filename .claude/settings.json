@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "respectGitignore": true,
+  "permissions": {
+    "deny": [
+      "Read(./kalshi_data.db)",
+      "Read(./kalshi_data*.db)",
+      "Glob(./**/*.db)",
+      "Read(./archive/**)"
+    ]
+  }
+}
