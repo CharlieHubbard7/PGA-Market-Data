@@ -484,12 +484,14 @@ function onTicker(msg) {
   if (!m) return;
 
   const prevBid = m.yes_bid;
-  m.yes_bid      = msg.yes_bid;
-  m.yes_ask      = msg.yes_ask;
+  // Coerce to Number defensively — Kalshi prices can arrive as strings, and
+  // string '0.03'+'0.04' silently concatenates instead of adding (→ NaN prices).
+  m.yes_bid      = Number(msg.yes_bid);
+  m.yes_ask      = Number(msg.yes_ask);
 
   // push to in-browser history
   const hist = tickHistory[msg.ticker];
-  hist.push({ ts: msg.ts, bid: msg.yes_bid, ask: msg.yes_ask });
+  hist.push({ ts: msg.ts, bid: m.yes_bid, ask: m.yes_ask });
   if (hist.length > TICK_MAX) hist.shift();
 
   // update table cells (no full re-render)

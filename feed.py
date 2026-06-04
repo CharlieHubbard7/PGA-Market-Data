@@ -106,8 +106,12 @@ async def _on_ticker(msg: dict):
     ticker  = msg.get("market_ticker")
     if not ticker or ticker not in markets:
         return
-    yes_bid = msg.get("yes_bid_dollars", msg.get("yes_bid", 0)) or 0
-    yes_ask = msg.get("yes_ask_dollars", msg.get("yes_ask", 0)) or 0
+    # Kalshi sends these as STRINGS over the WS ('0.0340'). Cast to float or every
+    # downstream consumer that does arithmetic breaks — e.g. (bid+ask)/2 becomes
+    # string concatenation → NaN. (The REST snapshot already casts; the WS path
+    # did not, so prices went NaN the moment the first live tick arrived.)
+    yes_bid = float(msg.get("yes_bid_dollars", msg.get("yes_bid", 0)) or 0)
+    yes_ask = float(msg.get("yes_ask_dollars", msg.get("yes_ask", 0)) or 0)
     ts      = time.time()
 
     markets[ticker]["yes_bid"] = yes_bid
@@ -124,7 +128,7 @@ async def _on_trade(msg: dict):
     if not ticker:
         return
     side  = msg.get("taker_side", msg.get("side", "?"))
-    price = msg.get("yes_price_dollars", msg.get("yes_price", msg.get("price", 0))) or 0
+    price = float(msg.get("yes_price_dollars", msg.get("yes_price", msg.get("price", 0))) or 0)
     count = msg.get("count")
     ts    = time.time()
 
