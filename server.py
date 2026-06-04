@@ -48,26 +48,34 @@ def _ensure_poly_map():
         _poly_map_built_for = n
 
 
-def _poly_fields(ticker: str):
-    """Current Polymarket (bid, ask, volume) for a Kalshi ticker, or (None,)*3."""
+_EMPTY_POLY = {"poly_bid": None, "poly_ask": None, "poly_volume": None,
+               "poly_last": None, "poly_mid": None}
+
+
+def _poly_fields(ticker: str) -> dict:
+    """Current Polymarket fields for a Kalshi ticker, or all-None."""
     _ensure_poly_map()
     for cid, tk in _cid_to_ticker.items():
         if tk == ticker:
             pm = polymarket_feed.poly_markets.get(cid)
             if pm:
-                return (pm.get("yes_bid"), pm.get("yes_ask"), pm.get("volume"))
+                return {"poly_bid": pm.get("yes_bid"), "poly_ask": pm.get("yes_ask"),
+                        "poly_volume": pm.get("volume"), "poly_last": pm.get("yes_last"),
+                        "poly_mid": pm.get("yes_mid")}
             break
-    return (None, None, None)
+    return dict(_EMPTY_POLY)
 
 
-async def _broadcast_poly(cid, player, bid, ask, volume):
+async def _broadcast_poly(cid, player, bid, ask, volume, last):
     _ensure_poly_map()
     tk = _cid_to_ticker.get(cid)
     if not tk:
         return
+    pm = polymarket_feed.poly_markets.get(cid) or {}
     await feed._broadcast({
         "type": "poly", "ticker": tk,
         "poly_bid": bid, "poly_ask": ask, "poly_volume": volume,
+        "poly_last": last, "poly_mid": pm.get("yes_mid"),
     })
 
 
@@ -101,7 +109,6 @@ async def get_markets():
         bid = float(m["yes_bid"] or 0)
         ask = float(m["yes_ask"] or 0)
         mid = (bid + ask) / 2 if ask else bid
-        p_bid, p_ask, p_vol = _poly_fields(ticker)
         result.append({
             "ticker":       ticker,
             "title":        m["title"],
@@ -114,9 +121,7 @@ async def get_markets():
             "pos":          m.get("pos", "—"),
             "score":        m.get("score", "—"),
             "thru":         m.get("thru", "—"),
-            "poly_bid":     p_bid,
-            "poly_ask":     p_ask,
-            "poly_volume":  p_vol,
+            **_poly_fields(ticker),
         })
     result.sort(key=lambda x: x["yes_bid"], reverse=True)
     return JSONResponse(result)
@@ -141,7 +146,8 @@ async def get_poly():
         pm = polymarket_feed.poly_markets.get(cid)
         if pm:
             out[tk] = {"poly_bid": pm.get("yes_bid"), "poly_ask": pm.get("yes_ask"),
-                       "poly_volume": pm.get("volume")}
+                       "poly_volume": pm.get("volume"), "poly_last": pm.get("yes_last"),
+                       "poly_mid": pm.get("yes_mid")}
     return JSONResponse(out)
 
 
@@ -156,7 +162,6 @@ async def ws_endpoint(websocket: WebSocket):
         bid = float(m["yes_bid"] or 0)
         ask = float(m["yes_ask"] or 0)
         mid = (bid + ask) / 2 if ask else bid
-        p_bid, p_ask, p_vol = _poly_fields(ticker)
         snapshot.append({
             "ticker":      ticker,
             "title":       m["title"],
@@ -168,9 +173,7 @@ async def ws_endpoint(websocket: WebSocket):
             "pos":         m.get("pos", "—"),
             "score":       m.get("score", "—"),
             "thru":        m.get("thru", "—"),
-            "poly_bid":    p_bid,
-            "poly_ask":    p_ask,
-            "poly_volume": p_vol,
+            **_poly_fields(ticker),
         })
     await websocket.send_text(json.dumps({
         "type": "init",

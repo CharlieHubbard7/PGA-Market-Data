@@ -200,6 +200,10 @@
   .arb-live     { color: var(--green); }
   .arb-live-row { background: rgba(63,185,80,.10); }
   .arb-stale    { color: var(--yellow); }     /* positive edge but a quote is stale — don't trust */
+
+  /* Polymarket single-price column — the "one number", highlighted */
+  .poly-price   { background: rgba(188,140,255,.10); color: var(--purple); font-weight: 700; font-variant-numeric: tabular-nums; }
+  th.poly-price { background: rgba(188,140,255,.10); color: var(--purple); }
   .pos-cell     { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 500; }
   .score-cell   { font-variant-numeric: tabular-nums; font-weight: 600; }
   .score-under  { color: var(--red); }    /* under par = lower is better, shown red like golf boards */
@@ -330,6 +334,7 @@
           <th data-col="poly_bid"    data-arrow="↑" class="col-p">P Bid</th>
           <th data-col="yes_ask"     data-arrow="↑" class="col-k">K Ask</th>
           <th data-col="poly_ask"    data-arrow="↑" class="col-p">P Ask</th>
+          <th data-col="polyPriceVal" data-arrow="↑" class="poly-price" title="Polymarket price (live midpoint)">P Price</th>
           <th data-col="volume"      data-arrow="↑" class="col-k">K Vol</th>
           <th data-col="poly_volume" data-arrow="↑" class="col-p">P Vol</th>
           <th>Speed</th>
@@ -338,7 +343,7 @@
         </tr>
       </thead>
       <tbody id="marketTbody">
-        <tr><td colspan="12" class="empty">Waiting for data…</td></tr>
+        <tr><td colspan="13" class="empty">Waiting for data…</td></tr>
       </tbody>
     </table>
   </div>
@@ -390,6 +395,8 @@ function recomputeSortKeys() {
     m.scoreVal = parseScore(m.score);
     const a = bestArb(m);
     m.arbNet = a ? a.net : -1;   // negative sentinel so no-opp rows sort below real edges
+    const pp = polyPrice(m);
+    m.polyPriceVal = pp ?? -1;
   });
 }
 
@@ -494,9 +501,12 @@ function onTrade(msg) {
 function onPoly(msg) {
   const m = markets[msg.ticker];
   if (!m) return;
+  const prevPrice = m.polyPriceVal;
   m.poly_bid    = msg.poly_bid;
   m.poly_ask    = msg.poly_ask;
   m.poly_volume = msg.poly_volume;
+  if (msg.poly_last != null) m.poly_last = msg.poly_last;
+  if (msg.poly_mid  != null) m.poly_mid  = msg.poly_mid;
   // Targeted updates to the P rows (no full re-render), mirroring updateRow.
   const pb = document.getElementById(`pbid-${msg.ticker}`);
   const pa = document.getElementById(`pask-${msg.ticker}`);
@@ -504,8 +514,36 @@ function onPoly(msg) {
   if (pb) pb.textContent = fmtPrice(m.poly_bid);
   if (pa) pa.textContent = fmtPrice(m.poly_ask);
   if (pv) pv.textContent = fmtUsd(m.poly_volume);
+
+  // Single "P Price" (live midpoint) — the one number Polymarket shows.
+  const np = polyPrice(m);
+  m.polyPriceVal = np ?? -1;
+  const ppEl = document.getElementById(`pprice-${msg.ticker}`);
+  if (ppEl) {
+    ppEl.textContent = fmtPrice(np);
+    const dir = (np != null && prevPrice != null && prevPrice >= 0)
+      ? (np > prevPrice ? 'up' : np < prevPrice ? 'down' : null) : null;
+    if (dir) flashCell(ppEl, dir);
+  }
+
   recordUpdate('p', msg.ticker);
   updateArb(msg.ticker);
+}
+
+// The single Polymarket number: live midpoint, falling back to last trade / Gamma price.
+function polyPrice(m) {
+  if (m.poly_bid != null && m.poly_ask != null) return (m.poly_bid + m.poly_ask) / 2;
+  if (m.poly_last != null) return m.poly_last;
+  if (m.poly_mid  != null) return m.poly_mid;
+  return null;
+}
+
+function flashCell(el, dir) {
+  const cls = `flash-${dir}`;
+  el.classList.remove('flash-up', 'flash-down');
+  void el.offsetWidth;
+  el.classList.add(cls);
+  el.addEventListener('animationend', () => el.classList.remove(cls), { once: true });
 }
 
 // ── table rendering ───────────────────────────────────────────────────────────
@@ -528,7 +566,7 @@ function renderTable() {
   const tbody = document.getElementById('marketTbody');
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="12" class="empty">No markets match the filter.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="13" class="empty">No markets match the filter.</td></tr>`;
     document.getElementById('filterCount').textContent = '';
     return;
   }
@@ -559,6 +597,7 @@ function rowHTML(m) {
       <td class="price-cell" id="pbid-${m.ticker}">${fmtPrice(m.poly_bid)}</td>
       <td class="price-cell" id="ask-${m.ticker}">${fmtPrice(m.yes_ask)}</td>
       <td class="price-cell" id="pask-${m.ticker}">${fmtPrice(m.poly_ask)}</td>
+      <td class="poly-price" id="pprice-${m.ticker}">${fmtPrice(polyPrice(m))}</td>
       <td class="vol-cell"   id="vol-${m.ticker}">${fmtVol(m.volume)}</td>
       <td class="vol-cell"   id="pvol-${m.ticker}">${fmtUsd(m.poly_volume)}</td>
       <td class="speed-cell">

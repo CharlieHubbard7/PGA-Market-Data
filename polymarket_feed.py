@@ -108,7 +108,8 @@ def fetch_markets() -> list[dict]:
             "event_slug":     POLY_EVENT_SLUG,
             "yes_bid":        _f(m.get("bestBid")),
             "yes_ask":        _f(m.get("bestAsk")),
-            "yes_mid":        _f(prices[0]) if prices else None,
+            "yes_mid":        _f(prices[0]) if prices else None,   # Gamma's displayed price
+            "yes_last":       _f(m.get("lastTradePrice")),         # last trade print
             "volume":         _f(m.get("volume")) or 0.0,
             "clob_token_ids": m.get("clobTokenIds"),
         })
@@ -191,7 +192,14 @@ async def _on_message(msg: dict):
     elif et == "book":
         await _update(msg.get("asset_id"),
                       _best_bid(msg.get("bids")), _best_ask(msg.get("asks")))
-    # ignored for now: new_market, tick_size_change, last_trade_price
+    elif et == "last_trade_price":
+        # Fires on every trade — drives the live single-price number + freshness.
+        cid = _token_to_cid.get(msg.get("asset_id"))
+        price = _f(msg.get("price"))
+        if cid and cid in poly_markets and price is not None:
+            poly_markets[cid]["yes_last"] = price
+            await _emit(cid)
+    # ignored for now: new_market, tick_size_change
 
 
 def _best_bid(levels):
@@ -220,14 +228,22 @@ async def _update(token, bid, ask):
     ts = time.time()
     poly_ticks[cid].append({"ts": ts, "bid": new_bid, "ask": new_ask})
     db.write_poly_tick(cid, new_bid, new_ask, m.get("yes_mid"), m.get("volume"))
+    await _emit(cid)
 
-    # Notify the server (if wired) so it can broadcast to the dashboard. Guarded
-    # so a broadcast error can never kill the feed.
-    if on_update is not None:
-        try:
-            await on_update(cid, m["player"], new_bid, new_ask, m.get("volume"))
-        except Exception as e:
-            print(f"[poly] on_update hook error: {e}", flush=True)
+
+async def _emit(cid):
+    """Notify the server (if wired) so it can broadcast to the dashboard. Guarded
+    so a broadcast error can never kill the feed."""
+    if on_update is None:
+        return
+    m = poly_markets.get(cid)
+    if not m:
+        return
+    try:
+        await on_update(cid, m["player"], m.get("yes_bid"), m.get("yes_ask"),
+                        m.get("volume"), m.get("yes_last"))
+    except Exception as e:
+        print(f"[poly] on_update hook error: {e}", flush=True)
 
 
 # ── standalone test entrypoint ────────────────────────────────────────────────
